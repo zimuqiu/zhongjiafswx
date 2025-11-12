@@ -1,0 +1,1837 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+*/
+import * as docx from 'docx';
+import saveAs from 'file-saver';
+import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { showToast, createFileUploadInput, renderSettingsDropdown } from './shared_ui.ts';
+
+
+// --- OA HISTORY DATABASE ---
+const oaHistoryDb = {
+    getHistory: () => {
+        try {
+            const history = localStorage.getItem('oa_history');
+            return history ? JSON.parse(history) : [];
+        } catch (e) {
+            return [];
+        }
+    },
+    addHistoryEntry: (entry) => {
+        const history = oaHistoryDb.getHistory();
+        history.unshift(entry); // Add to the beginning to show newest first
+        if (history.length > 50) { // Limit history size
+            history.pop();
+        }
+        localStorage.setItem('oa_history', JSON.stringify(history));
+    }
+};
+
+// --- APP STATE ---
+const getInitialOAReplyState = () => ({
+    currentStep: 'upload-files',
+    files: {
+        application: null as File | null,
+        officeAction: null as File | null,
+        reference1: null as File | null,
+        otherReferences: [] as File[],
+    },
+    analysisResult: '',
+    distinguishingFeatures: [] as any[],
+    selectedFeatures: [] as any[],
+    amendmentExplanationText: '',
+    technicalProblemFeaturesSummary: '',
+    technicalProblemStatement: '',
+    technicalProblemEffectsAnalysis: '',
+    nonObviousnessAnalysisText: '',
+    finalResponseText: '',
+    isLoading: false,
+    loadingStep: null  as string | null,
+    selectedHistoryId: null as number | null,
+    totalCost: 0,
+});
+let oaReplyState = getInitialOAReplyState();
+
+// --- VIEWS / COMPONENTS ---
+
+// --- OA REPLY FEATURE ---
+const oaNavItems = [
+    { id: 'upload-files', label: '上传文件', icon: 'upload_file' },
+    { id: 'distinguishing-features', label: '确定区别特征', icon: 'difference' },
+    { id: 'amendment-explanation', label: '修改说明', icon: 'edit_document' },
+    { id: 'technical-problem', label: '确定技术问题', icon: 'biotech' },
+    { id: 'non-obviousness', label: '非显而易见性分析', icon: 'lightbulb' },
+    { id: 'final-response', label: '最终答复文件', icon: 'assignment_turned_in' },
+    { id: 'history', label: '历史记录', icon: 'history' },
+];
+
+const updateOANavClasses = () => {
+    const navContainer = document.querySelector('#oa-reply-page nav');
+    if (!navContainer) return;
+
+    const currentStep = oaReplyState.currentStep;
+    const allLinks = navContainer.querySelectorAll('a[data-step]');
+
+    allLinks.forEach(link => {
+        const linkEl = link as HTMLElement;
+        const linkStep = linkEl.dataset.step;
+        if (linkStep === currentStep) {
+            linkEl.classList.add('bg-blue-600', 'text-white', 'font-semibold');
+            linkEl.classList.remove('hover:bg-gray-200', 'dark:hover:bg-gray-700');
+        } else {
+            linkEl.classList.remove('bg-blue-600', 'text-white', 'font-semibold');
+            linkEl.classList.add('hover:bg-gray-200', 'dark:hover:bg-gray-700');
+        }
+    });
+};
+
+const updateOAReplyView = () => {
+    updateOANavClasses();
+    const contentContainer = document.getElementById('oa-content-container');
+    if (contentContainer) {
+        contentContainer.innerHTML = renderOAContent();
+    }
+    attachOAContentEventListeners();
+};
+
+const renderOANav = () => {
+    return `
+        <nav class="h-full bg-gray-50 dark:bg-gray-800 w-72 p-4 flex flex-col border-r border-gray-200 dark:border-gray-700 shrink-0">
+            <ul class="flex flex-col gap-2">
+                ${oaNavItems.map(item => `
+                    <li>
+                        <a href="#" class="flex items-center gap-3 p-3 rounded-md transition-colors ${oaReplyState.currentStep === item.id ? 'bg-blue-600 text-white font-semibold' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}" data-step="${item.id}">
+                            <span class="material-symbols-outlined">${item.icon}</span>
+                            <span>${item.label}</span>
+                        </a>
+                    </li>
+                `).join('')}
+            </ul>
+            <div class="mt-auto pt-4 border-t border-gray-200 dark:border-gray-700">
+                 <button id="restart-oa" class="w-full flex items-center justify-center gap-2 p-3 rounded-full bg-red-600 text-white font-bold hover:bg-red-700 transition-colors">
+                    <span class="material-symbols-outlined">refresh</span>
+                    重新开始
+                </button>
+            </div>
+        </nav>
+    `;
+}
+
+const renderOAContent = () => {
+    switch (oaReplyState.currentStep) {
+        case 'upload-files':
+            return renderUploadFilesContent();
+        case 'distinguishing-features':
+            return renderDistinguishingFeaturesContent();
+        case 'amendment-explanation':
+            return renderAmendmentExplanationContent();
+        case 'technical-problem':
+            return renderTechnicalProblemContent();
+        case 'non-obviousness':
+            return renderNonObviousnessContent();
+        case 'final-response':
+            return renderFinalResponseContent();
+        case 'history':
+            return renderHistoryContent();
+        default:
+            return `<div class="w-full max-w-4xl mx-auto"><h3 class="text-2xl font-bold mb-6">${oaNavItems.find(i => i.id === oaReplyState.currentStep)?.label}</h3><p>此功能正在开发中。</p></div>`;
+    }
+}
+
+const renderUploadFilesContent = () => `
+    <div class="w-full max-w-4xl mx-auto">
+        <h3 class="text-2xl font-bold mb-6">上传文件</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            ${createFileUploadInput('application', '发明申请文件')}
+            ${createFileUploadInput('officeAction', '审查意见通知书')}
+            ${createFileUploadInput('reference1', '对比文件1')}
+            ${createFileUploadInput('otherReferences', '其他对比文件', true)}
+        </div>
+        <div class="mt-8 text-center">
+            <button id="start-analysis-btn" class="bg-blue-600 text-white font-bold py-4 px-12 rounded-lg hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                开始分析
+            </button>
+        </div>
+    </div>
+`;
+
+const renderDistinguishingFeaturesContent = () => {
+    const title = '确定区别特征';
+
+    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'distinguishing-features') {
+        return `
+         <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="flex flex-col items-center justify-center h-64 bg-white dark:bg-gray-800 rounded-lg">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                <p class="mt-4 text-gray-700 dark:text-gray-300">正在分析中，请稍候...</p>
+            </div>
+         </div>
+        `;
+    }
+
+    if (oaReplyState.analysisResult) { // This now primarily serves to show error messages
+        return `
+         <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="prose dark:prose-invert max-w-none bg-white dark:bg-gray-800 p-6 rounded-lg border border-red-500/50">
+               <p class="text-red-500 dark:text-red-400">抱歉，分析过程中出现错误：</p>
+               <p>${oaReplyState.analysisResult}</p>
+            </div>
+         </div>
+        `;
+    }
+    
+    if (!oaReplyState.distinguishingFeatures || oaReplyState.distinguishingFeatures.length === 0) {
+        return `
+         <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
+               <p>未找到可供选择的区别技术特征。请返回上一步检查上传的文件。</p>
+            </div>
+         </div>
+        `;
+    }
+    
+    const getRecommendationBadge = (recommendation) => {
+        switch (recommendation) {
+            case '强烈推荐': return `<span class="bg-green-600 text-green-100 text-xs font-bold me-2 px-3 py-1 rounded-full">强烈推荐</span>`;
+            case '推荐': return `<span class="bg-blue-600 text-blue-100 text-xs font-bold me-2 px-3 py-1 rounded-full">推荐</span>`;
+            case '不推荐': return `<span class="bg-gray-500 text-gray-100 text-xs font-bold me-2 px-3 py-1 rounded-full">不推荐</span>`;
+            default: return `<span class="bg-yellow-600 text-yellow-100 text-xs font-bold me-2 px-3 py-1 rounded-full">${recommendation}</span>`;
+        }
+    };
+
+    const claimFeatures = oaReplyState.distinguishingFeatures.filter(f => f.category === 'claim');
+    const specificationFeatures = oaReplyState.distinguishingFeatures.filter(f => f.category === 'specification');
+
+    const renderFeatureList = (features, title) => {
+        if (features.length === 0) return '';
+        return `
+            <div class="mt-6">
+                <h4 class="text-xl font-semibold mb-4 text-gray-700 dark:text-gray-300">${title}</h4>
+                <div class="space-y-4">
+                    ${features.map(item => {
+                        const originalIndex = oaReplyState.distinguishingFeatures.indexOf(item);
+                        const isChecked = oaReplyState.selectedFeatures.some(sf => sf.feature === item.feature);
+                        return `
+                            <div class="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 transition-all duration-200 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-500/5 dark:has-[:checked]:bg-gray-800/50">
+                                <div class="flex items-start gap-4">
+                                    <input type="checkbox" id="feature-${originalIndex}" name="selected-feature" class="mt-1.5 h-5 w-5 shrink-0 rounded bg-gray-200 dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-blue-500 focus:ring-blue-600 focus:ring-2 cursor-pointer" ${isChecked ? 'checked' : ''}>
+                                    <div class="flex-1">
+                                        <label for="feature-${originalIndex}" class="font-semibold text-gray-800 dark:text-gray-200 cursor-pointer">${item.feature}</label>
+                                        <div class="mt-3">
+                                            <p class="text-sm font-semibold text-blue-500 dark:text-blue-400 mb-1">特征出处</p>
+                                            <p class="text-sm text-gray-500 dark:text-gray-400">${item.source}</p>
+                                        </div>
+                                        <div class="mt-4">
+                                            <p class="text-sm font-semibold text-blue-500 dark:text-blue-400 mb-1">技术效果</p>
+                                            <p class="text-sm text-gray-500 dark:text-gray-400">${item.beneficialEffect}</p>
+                                        </div>
+                                        <div class="mt-4 flex items-center gap-3">
+                                            <p class="text-sm font-semibold text-blue-500 dark:text-blue-400">决策建议</p>
+                                            ${getRecommendationBadge(item.recommendation)}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        `;
+    };
+
+    return `
+     <div class="w-full max-w-4xl mx-auto">
+        <h3 class="text-2xl font-bold mb-6">${title}</h3>
+        <p class="text-gray-500 dark:text-gray-400 mb-6">以下是AI分析得出的区别技术特征。请选择您希望在答复中采用的特征，可从两组中任意选择：</p>
+        <div id="features-list">
+            ${renderFeatureList(claimFeatures, 'A. 现有权要中已被审查员指出的区别特征')}
+            ${renderFeatureList(specificationFeatures, 'B. 说明书记载但未写入权利要求的技术特征')}
+        </div>
+        <div class="mt-8 text-center">
+            <button id="confirm-features-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
+                确认选择并进入下一步
+            </button>
+        </div>
+     </div>
+    `;
+}
+
+const renderAmendmentExplanationContent = () => {
+    const title = '修改说明';
+
+    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'amendment-explanation') {
+        return `
+         <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="flex flex-col items-center justify-center h-64 bg-white dark:bg-gray-800 rounded-lg">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                <p class="mt-4 text-gray-700 dark:text-gray-300">正在生成修改说明，请稍候...</p>
+            </div>
+         </div>
+        `;
+    }
+
+    return `
+        <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">AI已根据您选择的区别特征生成了权利要求修改说明的草稿。请在此基础上进行编辑和完善。</p>
+            <textarea id="amendment-explanation-text" rows="18" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.amendmentExplanationText}</textarea>
+            <div class="mt-8 text-center">
+                <button id="confirm-amendment-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
+                    确认并进入下一步
+                </button>
+            </div>
+        </div>
+    `;
+};
+
+const renderTechnicalProblemContent = () => {
+    const title = '确定技术问题';
+    
+    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'technical-problem') {
+        return `
+         <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="flex flex-col items-center justify-center h-64 bg-white dark:bg-gray-800 rounded-lg">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                <p class="mt-4 text-gray-700 dark:text-gray-300">正在生成分析内容，请稍候...</p>
+            </div>
+         </div>
+        `;
+    }
+
+    return `
+        <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="space-y-8">
+                <div>
+                    <label for="features-summary" class="block text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">1. 区别技术特征汇总</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">将选择的技术特征汇总成一段文字，作为答复意见的正式部分。</p>
+                    <textarea id="features-summary" rows="5" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.technicalProblemFeaturesSummary}</textarea>
+                </div>
+                <div>
+                    <label for="technical-problem-statement" class="block text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">2. 确定技术问题</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">根据区别特征，用简洁的语言概括本发明实际解决的技术问题。</p>
+                    <textarea id="technical-problem-statement" rows="3" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.technicalProblemStatement}</textarea>
+                </div>
+                <div>
+                    <label for="effects-analysis" class="block text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">3. 有益效果分析</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">详细分析每个区别特征是如何解决上述技术问题，并带来了何种有益效果。</p>
+                    <textarea id="effects-analysis" rows="8" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.technicalProblemEffectsAnalysis}</textarea>
+                </div>
+            </div>
+            <div class="mt-8 text-center">
+                <button id="confirm-problem-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
+                    确认并进入下一步
+                </button>
+            </div>
+        </div>
+    `;
+};
+
+const renderNonObviousnessContent = () => {
+    const title = '非显而易见性分析';
+
+    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'non-obviousness') {
+        return `
+         <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="flex flex-col items-center justify-center h-64 bg-white dark:bg-gray-800 rounded-lg">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                <p class="mt-4 text-gray-700 dark:text-gray-300">正在生成非显而易见性分析，请稍候...</p>
+            </div>
+         </div>
+        `;
+    }
+
+    return `
+        <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">AI已根据“三步法”生成非显而易见性分析草稿。请在此基础上进行编辑和完善，以构建最终的法律论证。</p>
+            <textarea id="non-obviousness-analysis" rows="18" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.nonObviousnessAnalysisText}</textarea>
+            <div class="mt-8 text-center">
+                <button id="confirm-non-obviousness-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
+                    确认并生成最终答复文件
+                </button>
+            </div>
+        </div>
+    `;
+};
+
+const renderFinalResponseContent = () => {
+    const title = '最终答复文件';
+
+    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'final-response') {
+        return `
+         <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="flex flex-col items-center justify-center h-64 bg-white dark:bg-gray-800 rounded-lg">
+                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                <p class="mt-4 text-gray-700 dark:text-gray-300">正在生成最终答复文件，请稍候...</p>
+            </div>
+         </div>
+        `;
+    }
+
+    return `
+        <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="bg-blue-50 dark:bg-gray-800/50 border border-blue-200 dark:border-gray-700 p-4 rounded-lg mb-6 flex justify-between items-center">
+                <div class="flex items-center gap-3">
+                    <span class="material-symbols-outlined text-blue-600 dark:text-blue-400">monetization_on</span>
+                    <span class="font-semibold text-gray-800 dark:text-gray-200">本次OA答复AI消费总计:</span>
+                </div>
+                <span class="text-xl font-bold text-blue-600 dark:text-blue-400">¥ ${oaReplyState.totalCost.toFixed(4)}</span>
+            </div>
+            <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">AI已生成最终答复文件草稿。请在此基础上进行最终的编辑和完善，然后导出为Word文件。</p>
+            <textarea id="final-response-text" rows="20" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.finalResponseText}</textarea>
+            <div class="mt-8 text-center">
+                <button id="export-word-btn" class="bg-green-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 mx-auto">
+                    <span class="material-symbols-outlined">download</span>
+                    导出Word文件
+                </button>
+            </div>
+        </div>
+    `;
+};
+
+const renderHistoryContent = () => {
+    if (oaReplyState.selectedHistoryId) {
+        const history = oaHistoryDb.getHistory();
+        const entry = history.find(item => item.id === oaReplyState.selectedHistoryId);
+        return entry ? renderHistoryDetailContent(entry) : '<p>未找到该历史记录。</p>';
+    } else {
+        const history = oaHistoryDb.getHistory();
+        return renderHistoryListContent(history);
+    }
+}
+
+const renderHistoryListContent = (history) => {
+    const title = '历史记录';
+    if (history.length === 0) {
+        return `
+            <div class="w-full max-w-4xl mx-auto">
+                <h3 class="text-2xl font-bold mb-6">${title}</h3>
+                <div class="bg-white dark:bg-gray-800 p-6 rounded-lg text-center">
+                    <p class="text-gray-500 dark:text-gray-400">暂无历史记录。</p>
+                </div>
+            </div>
+        `;
+    }
+    return `
+        <div class="w-full max-w-4xl mx-auto">
+            <h3 class="text-2xl font-bold mb-6">${title}</h3>
+            <div class="space-y-4">
+                ${history.map(entry => `
+                    <div class="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                        <div>
+                            <p class="font-semibold text-gray-800 dark:text-gray-200" title="${entry.files.application || '无申请文件'}">${entry.files.application || '未命名会话'}</p>
+                            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">${entry.date}</p>
+                        </div>
+                        <button class="view-history-detail-btn bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-sm" data-history-id="${entry.id}">
+                            查看详情
+                        </button>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+const renderHistoryDetailContent = (entry) => {
+    const title = '历史记录详情';
+    const allFiles = [
+        { label: '发明申请文件', name: entry.files.application },
+        { label: '审查意见通知书', name: entry.files.officeAction },
+        { label: '对比文件1', name: entry.files.reference1 },
+        ...(entry.files.otherReferences || []).map((name, i) => ({ label: `其他对比文件 ${i+1}`, name })),
+    ].filter(f => f.name);
+
+    return `
+        <div class="w-full max-w-4xl mx-auto">
+            <div class="flex items-center gap-4 mb-6">
+                <button id="back-to-history-list" class="bg-transparent border-none text-gray-500 dark:text-gray-400 cursor-pointer p-2 rounded-full flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-white" aria-label="返回历史列表">
+                    <span class="material-symbols-outlined">arrow_back</span>
+                </button>
+                <h3 class="text-2xl font-bold">${title}</h3>
+            </div>
+            <div class="bg-white dark:bg-gray-800 p-6 rounded-lg space-y-6">
+                <div>
+                    <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">会话信息</h4>
+                    <p class="text-sm text-gray-500 dark:text-gray-400"><strong>创建时间:</strong> ${entry.date}</p>
+                </div>
+                <div>
+                    <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">使用文件</h4>
+                    <ul class="list-disc list-inside text-sm text-gray-600 dark:text-gray-300 space-y-1">
+                        ${allFiles.length > 0 ? allFiles.map(f => `<li><strong>${f.label}:</strong> ${f.name}</li>`).join('') : '<li>未记录文件信息。</li>'}
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">最终答复文件内容</h4>
+                    <textarea readonly class="w-full h-96 bg-gray-100 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 font-mono text-sm">${entry.finalResponseText}</textarea>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+
+const updateFileListsDOM = () => {
+    const fileInputIds = ['application', 'officeAction', 'reference1', 'otherReferences'];
+    fileInputIds.forEach(id => {
+        const fileListContainer = document.getElementById(`${id}-file-list`);
+        if (!fileListContainer) return;
+
+        const files = id === 'otherReferences'
+            ? oaReplyState.files.otherReferences
+            : (oaReplyState.files[id] ? [oaReplyState.files[id]] : []);
+
+        fileListContainer.innerHTML = files.map(f => `
+            <div class="bg-gray-200 dark:bg-gray-700 p-1 px-2 rounded-md text-xs flex justify-between items-center transition-all">
+                <span class="material-symbols-outlined text-base mr-2 text-gray-500 dark:text-gray-400">description</span>
+                <span class="truncate flex-grow" title="${f.name}">${f.name}</span>
+                <button class="remove-file-btn ml-2 p-1 rounded-full text-gray-500 dark:text-gray-400 hover:bg-red-500 hover:text-white focus:outline-none focus:ring-2 focus:ring-red-500" data-input-id="${id}" data-filename="${f.name}" aria-label="移除 ${f.name}">
+                    <span class="material-symbols-outlined text-sm pointer-events-none">close</span>
+                </button>
+            </div>
+        `).join('');
+    });
+};
+
+const updateStartAnalysisButtonState = () => {
+    const startBtn = document.getElementById('start-analysis-btn') as HTMLButtonElement;
+    if (startBtn) {
+        const { application, officeAction, reference1 } = oaReplyState.files;
+        startBtn.disabled = !(application && officeAction && reference1);
+    }
+};
+
+
+// --- EVENT HANDLERS ---
+const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+        if (typeof reader.result === 'string') {
+            resolve(reader.result.split(',')[1]);
+        } else {
+            reject(new Error('Failed to read file as base64 string.'));
+        }
+    };
+    reader.onerror = error => reject(error);
+});
+
+const getMimeType = (fileName) => {
+    const extension = fileName.split('.').pop()?.toLowerCase() || '';
+    const mimeTypes = {
+        'pdf': 'application/pdf',
+        'doc': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'txt': 'text/plain',
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+    };
+    return mimeTypes[extension] || 'application/octet-stream';
+};
+
+
+const handleStartAnalysis = async () => {
+    const ai = getAi();
+    if (!ai) {
+        showToast('AI服务初始化失败，请刷新页面重试。');
+        return;
+    }
+    
+    oaReplyState.isLoading = true;
+    oaReplyState.loadingStep = 'distinguishing-features';
+    oaReplyState.currentStep = 'distinguishing-features';
+    updateOAReplyView();
+
+    try {
+        const fileToPart = async (file: File | null) => {
+            if (!file) return null;
+            const base64Data = await fileToBase64(file);
+            return {
+                inlineData: {
+                    mimeType: getMimeType(file.name),
+                    data: base64Data,
+                },
+            };
+        };
+        
+        const allFiles = [
+            oaReplyState.files.application,
+            oaReplyState.files.officeAction,
+            oaReplyState.files.reference1,
+            ...oaReplyState.files.otherReferences
+        ].filter((f): f is File => f !== null);
+
+        if (allFiles.length === 0) {
+            throw new Error("请至少上传一个文件。");
+        }
+
+        const fileParts = (await Promise.all(allFiles.map(fileToPart))).filter(p => p !== null);
+
+        const prompt = `
+# **角色**
+你是一位顶尖的中国专利代理人，拥有敏锐的洞察力和卓越的战略思维。你的核心任务不仅仅是答复OA，更是为专利申请规划出一条最稳妥、最高效的授权路径。你的分析必须严谨、精确，并在中国专利法下具有法律依据。
+
+# **战略目标/任务**
+全面剖析申请文件、审查意见及对比文件，构建一份“区别技术特征战略地图”。这份地图将明确标识出我们已有的“防线”（权利要求中的特征）和潜在的“王牌”（说明书中的特征），并为下一步的权利要求修改和意见陈述提供具体、可执行的战术建议。
+
+# **输入文件**
+你将根据以下文件和协议来准备你的分析。此协议授权你在必要时主动检索缺失的对比文件。
+
+输入模块 (Input Modules)
+1. 发明申请文件 (Application File): [此处粘贴申请文件原文]
+2. 审查意见通知书 (Office Action): [此处粘贴审查意见通知书原文] (作为所有引证文件的唯一事实来源)
+3. 已上传的对比文件 (User-Provided Documents): (可选)
+[例如：对比文件1 (CN123456789A): [粘贴文件内容]]
+[例如：对比文件3 (US2023/0123456A1): [粘贴文件内容]]
+
+最高优先级 - 动态文件处理协议 (Highest Priority - Dynamic Document Handling Protocol)
+在开始任何实质性分析之前，你必须严格遵循以下自动化工作流程，以确保你拥有所有必需的对比文件：
+步骤 1：确立“待办清单” (Establish "To-Do List")
+仔细阅读审查意见通知书的文本。
+提取一份完整的、官方引用的所有对比文件的**【公开号】**清单。这将是你的“必需文件清单”。
+步骤 2：盘点与决策 (Inventory & Decision)
+将“必需文件清单”与我在已上传的对比文件模块中提供的内容进行比对。
+为清单上的每一个文件，你必须做出以下决策：
+情况A：文件已上传 (Action: Use Provided)
+如果必需清单中的某个公开号，在已上传的对比文件中存在匹配项，你必须直接使用我提供的内容。用户上传的文件具有最高优先级。
+情况B：文件未上传 (Action: Initiate Retrieval)
+如果必需清单中的某个公开号，在已上传的对比文件中不存在，你必须启动自主检索程序。
+步骤 3：执行检索 (Execute Retrieval)
+对于每一个需要检索的文件，你将使用其**【完整公开号】**作为精确的搜索查询。
+在分析搜索结果时，优先选择来自官方专利数据库（如 CNIPA, USPTO, EPO, WIPO）或信誉良好的专利聚合平台（如 Google Patents）的链接。
+从检索到的文件中，重点提取其技术内容，特别是“具体实施方式”、“发明内容”或“Detailed Description”部分。
+
+# **分析框架与工作流程**
+防线评估 (来自权利要求1)：
+首先，将独立权利要求1与对比文件1进行逐一比对，并结合审查意见，精准定位审查员已认定的、源自当前权利要求书1的区别技术特征，同时将从属权利要求与对比文件1进行逐一比对，并结合审查意见，精准定位审查员已认定的、源自当前从属权利要求的区别技术特征。
+王牌挖掘 (来自说明书)：
+然后，深入研读申请文件的“具体实施方式”部分，发掘那些在对比文件中未被公开、能够带来显著技术效果、但尚未写入权利要求的“黄金”技术特征。这是我们反败而胜的关键。
+特征整合与提炼：
+在识别特征时，将功能上紧密关联的技术元素，逻辑地整合为一个单一、完整的区别特征。避免将一个整体的技术方案过度碎片化。
+战略价值评估:
+对识别出的每一个特征，都进行独立的、全面的战略价值评估，并最终形成JSON输出。
+
+# **输出格式**
+你的最终输出**必须**是一个JSON对象数组，严格遵守所提供的模式。
+
+# **关键规则**
+category: (string)
+规则: 值必须是 "claim" (代表“防线评估”) 或 "specification" (代表“王牌挖掘”) 之一。
+feature: (string)
+规则: 内容必须是源文件中一字不差的原文引用。严禁任何形式的总结、改写或释义。
+source: (string)
+规则: 必须提供该特征的精确出处。格式固定为 "权利要求 X" 或“具体实施方式”部分的特定段落（例如，“说明书第[0025]段”）。严禁引用“背景技术”“发明内容”等其他部分。
+beneficialEffect: (string)
+规则: 详细阐述该特征如何直接贡献于解决本申请的技术问题，并带来何种具体、可验证的技术优势。
+recommendation: (string)
+规则: 根据下方【推荐等级标准】进行评估，值必须是 "强烈推荐", "推荐" 或 "不推荐" 之一。
+【推荐等级标准】:
+强烈推荐: 该特征具有实质性区别，能带来预料不到的技术效果，且在所有对比文件中均未见启示。是修改权利要求的首选。
+推荐: 该特征具有较明确的区别，能带来有益的技术效果，但在某个对比文件中可能存在模糊的教导。可作为备选或组合特征。
+不推荐: 该特征区别微弱，属于常规技术手段，或已被对比文件公开。应避免作为核心争辩点。
+justification: (string)
+新增字段: 详细阐述你给出上述recommendation评级的核心理由。例如：“此特征直接解决了对比文件1无法处理的XX技术难题，并带来了XX%的性能提升，构成了本申请的核心创新点，因此强烈推荐。”
+通用规则: 所有字段的文本均不得包含任何专利附图标记（例如 (10)、20a 等）。
+`;
+        
+        const responseSchema = {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              category: {
+                  type: "STRING",
+                  description: '特征的类别，必须是 "claim" (来自权利要求) 或 "specification" (来自说明书)。'
+              },
+              feature: {
+                type: "STRING",
+                description: '识别出的区别技术特征，必须是原文，不要总结，不带标号。'
+              },
+              source: {
+                  type: "STRING",
+                  description: '特征的出处，必须明确到具体的某一条权利要求（例如：“权利要求1”）或具体实施方式中的内容（例如：“说明书第[0025]段”）。'
+              },
+              beneficialEffect: {
+                type: "STRING",
+                description: '该特征带来的详细的有益技术效果，不带标号。'
+              },
+              recommendation: {
+                type: "STRING",
+                description: '决策建议，例如 "强烈推荐", "推荐", 或 "不推荐"。'
+              },
+              justification: {
+                type: "STRING",
+                description: "给出推荐等级的核心理由"
+              }
+            },
+            required: ["category", "feature", "source", "beneficialEffect", "recommendation", "justification"]
+          }
+        };
+
+        const contents = { parts: [{ text: prompt }, ...fileParts] };
+
+        const { response, cost } = await generateContentWithRetry({
+            model: 'gemini-2.5-pro',
+            contents: contents,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: responseSchema,
+            },
+        });
+        oaReplyState.totalCost += cost;
+        
+        const resultText = response.text.trim();
+        try {
+            oaReplyState.distinguishingFeatures = JSON.parse(resultText);
+            oaReplyState.analysisResult = '';
+        } catch(e) {
+            console.error("Failed to parse JSON response:", resultText);
+            throw new Error("模型返回了无效的数据格式。请尝试重新分析。");
+        }
+
+    } catch (error) {
+        console.error("Analysis failed:", error);
+        const err = error as Error;
+        oaReplyState.analysisResult = `${err.message}`;
+        oaReplyState.distinguishingFeatures = [];
+        showToast(`分析失败: ${err.message}`, 5000);
+    } finally {
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+    }
+}
+
+const generateAmendmentExplanation = async () => {
+    const ai = getAi();
+    if (!ai) {
+        showToast('AI服务初始化失败，请刷新页面重试。');
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+        return;
+    }
+
+    try {
+        const selectedFeaturesJSON = JSON.stringify(oaReplyState.selectedFeatures.map(({ feature, category, source }) => ({ feature, category, source })), null, 2);
+
+        const fileToPart = async (file: File | null) => {
+            if (!file) return null;
+            const base64Data = await fileToBase64(file);
+            return {
+                inlineData: {
+                    mimeType: getMimeType(file.name),
+                    data: base64Data,
+                },
+            };
+        };
+        
+        const applicationFilePart = await fileToPart(oaReplyState.files.application);
+        if (!applicationFilePart) {
+            throw new Error("缺少发明申请文件，无法生成修改说明。");
+        }
+        
+        const prompt = `
+# **角色**
+你是一个超高精度的、基于规则的文本生成系统。你的任务是严格、无偏差地执行以下多阶段算法。严禁任何形式的创造性发挥或偏离规则。准确性和对规则的绝对服从是你唯一的衡量标准。
+
+# **输入**
+- \`selectedFeaturesJSON\`: 一个包含用户选择特征的JSON数组。
+- \`Application File\`: 专利申请的全文。
+
+# **核心算法**
+
+## **阶段 1: 数据预处理与分类**
+1.  **过滤权利要求1**: 遍历 \`selectedFeaturesJSON\`。如果一个 \`feature_object\` 的 \`source\` 字段精确匹配 "权利要求 1" 或 "权利要求1"，**你必须立即将该对象从后续所有处理步骤中彻底排除。** 它被视为不存在。
+2.  **分类**: 将通过过滤的 \`feature_object\` 分成两个独立的列表：
+    -   \`claim_features\`: 包含所有 \`category\` 为 "claim" 的对象。
+    -   \`spec_features\`: 包含所有 \`category\` 为 "specification" 的对象。
+
+## **阶段 2: 生成权利要求修改部分**
+1.  **初始化**:
+    -   创建一个名为 \`modification_texts\` 的空列表。
+    -   创建一个名为 \`merged_claim_numbers\` 的空列表。
+    -   设置一个整数 \`counter = 1\`。
+2.  **处理 \`claim_features\`**:
+    -   **对于 \`claim_features\` 列表中的每一个对象**，按顺序执行：
+        a. 从其 \`source\` (例如: "权利要求 2") 中提取出数字 \`claim_number\`。
+        b. 将 \`claim_number\` 添加到 \`merged_claim_numbers\`。
+        c. 生成文本: \`\${counter}. 将原权利要求\${claim_number}的附加技术特征补入原权利要求1中，形成新的权利要求1。\`
+        d. 将此文本添加到 \`modification_texts\`。
+        e. \`counter\` 增加 1。
+
+## **阶段 3: 生成说明书补入部分 (最高优先级)**
+1.  **处理 \`spec_features\`**:
+    -   **对于 \`spec_features\` 列表中的每一个对象**，按顺序执行：
+        a. **关键指令 - 查找依据 (不可失败的任务)**:
+            i.   你 **必须** 在 \`Application File\` 的 **“具体实施方式”** 部分，为当前处理的 \`feature_object.feature\` 找到其出处。
+            ii.  **首选策略**: 查找与 \`feature_object.feature\` **完全匹配**的文本。
+            iii. **备用策略 (如果完全匹配失败)**: 查找与 \`feature_object.feature\` **语义最接近、表达相同技术内容的句子**。
+            iv.  一旦找到，必须记录其所在的**完整句子 (\`full_sentence\`)** 和 **段落号 (\`paragraph_number\`)**。
+            v.   **核心原则**: 遗漏任何一个来自说明书的特征的“修改依据”都是致命的失败。你必须为每一个 \`spec_feature\` 找到依据。
+        b. **生成文本 (必须生成两条)**:
+            i.   **修改动作**: \`\${counter}. 在上述新的权利要求1中补入“\${feature_object.feature}”。\`
+            ii.  **修改依据**: \`修改依据：根据说明书第\${paragraph_number}段记载的“\${full_sentence}”，可以直接地、毫无疑义地确定上述补入内容。\`
+        c. 将这两条文本都添加到 \`modification_texts\`。
+        d. \`counter\` 增加 1。
+
+## **阶段 4: 最终整合与输出**
+1.  **处理权利要求删除**:
+    -   如果 \`merged_claim_numbers\` 列表不为空：
+        a. 对其进行去重和升序排序。
+        b. 将排序后的数字序列合并成范围或逗号分隔的字符串 \`claim_range\` (例如: "2-4, 6")。
+        c. 生成删除文本: \`\${counter}、为避免重复限定，删除原权利要求\${claim_range}。\`
+        d. 将该文本添加到 \`modification_texts\`。
+2.  **添加法律声明**:
+    -   生成法律声明: \`上述修改没有超出原权利要求书和说明书记载的范围，符合专利法第33条的规定。\`
+    -   将该文本添加到 \`modification_texts\`。
+3.  **最终校验 (强制执行)**:
+    -   在输出前，**必须**执行此检查。
+    -   回顾最初的 \`spec_features\` 列表。对于其中的**每一个**对象，确认在 \`modification_texts\` 中都存在对应的“修改动作”和“修改依据”。
+    -   如果发现任何遗漏，**必须**返回阶段 3 修正错误，直到所有 \`spec_features\` 都被正确处理。
+4.  **输出**:
+    -   用换行符连接 \`modification_texts\` 中的所有项目。
+    -   你的最终输出**必须且只能**是这个连接后的字符串。禁止任何前缀、解释、注释或元数据。直接开始输出文本。
+`;
+        
+        const contents = { parts: [{ text: prompt }, {text: `selectedFeaturesJSON:\n${selectedFeaturesJSON}`}, applicationFilePart] };
+        
+        const { response, cost } = await generateContentWithRetry({
+            model: 'gemini-2.5-pro',
+            contents: contents,
+        });
+        oaReplyState.totalCost += cost;
+
+        oaReplyState.amendmentExplanationText = response.text.trim();
+
+    } catch (error) {
+        const err = error as Error;
+        console.error("Amendment explanation generation failed:", err);
+        showToast(`修改说明生成失败: ${err.message}`, 5000);
+        // Revert to previous step on failure
+        oaReplyState.currentStep = 'distinguishing-features';
+    } finally {
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+    }
+};
+
+const generateTechnicalProblemAnalysis = async () => {
+    const ai = getAi();
+    if (!ai) {
+        showToast('AI服务初始化失败，请刷新页面重试。');
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+        return;
+    }
+
+    try {
+        const selectedFeaturesText = oaReplyState.selectedFeatures.map(f => `- ${f.feature} (来源: ${f.source}, 效果: ${f.beneficialEffect})`).join('\n');
+
+        const prompt = `
+# **角色**
+你是一位顶尖的中国专利代理人，正在为一份审查意见（OA）答复构建核心的“创造性”论证部分。你的论证必须逻辑严密，说服力强，并严格遵循中国专利审查指南中的“三步法”。
+
+# **战略目标/任务**
+基于我方已确定的、最具防御力的“区别技术特征”，构建一个无法辩驳的论证，证明本申请的技术方案相对于现有技术组合是非显而易见的，具备专利法第22条第3款规定的创造性。
+生成一份结构化的JSON对象，该对象将作为OA答复中“创造性”部分的核心素材。这份材料必须清晰地呈现区别特征、由此解决的技术问题、以及这些特征如何在本申请的技术方案中独立地、协同地产生有益效果，从而证明本申请具备“突出的实质性特点”和“显著的进步”。
+
+# **输入**
+以下是用户已选择用于进行论证的区别技术特征列表：
+\`\`\`
+${selectedFeaturesText}
+\`\`\`
+
+# **输出要求**
+你**必须**生成一个包含三个特定键的JSON对象：\`featuresSummary\`、\`technicalProblemStatement\`和\`effectsAnalysis\`。请严格遵守以下格式。
+输出内容必须严格按照示例中给出的格式。
+
+# **关键规则**
+1.  **最高优先级 - 聚焦本申请**: 绝对的“本申请中心”原则: 在撰写effectsAnalysis时，你的思维和语言必须完全聚焦于本申请自身。严格禁止在该部分以任何形式（直接或间接）提及、比较、评价或影射任何对比文件。这是一个关于“事实陈述”的部分，而非“对比论证”。
+2.  内容纯洁性: 所有生成的文本内容严禁包含任何专利附图标记（如 (10)、20a 等）。
+3.  **格式一致性**: 输出必须是单一、完整、且语法正确的JSON对象，严格遵守上述所有格式规定。
+4.  输出要求：直接输出区别特征、技术问题、技术效果部分，不要加其他非关联用语。
+
+## 1. featuresSummary
+- **内容**: 将所选的所有featureText汇总为一段正式的、法律文书风格的陈述。
+- **格式**:
+  - 必须以“申请人认为，修改后的权利要求1和对比文件1的区别技术特征至少是：”作为固定开头。
+  - 使用带括号数字（如 (1), (2), (3)）作为序号列出每个特征。
+  - 特征内容必须使用featureText的原文，但要删除任何可能存在的句首“所述”二字。
+  - 每个特征**必须**占一行。
+  - 除最后一个特征外，每个特征的行尾必须以分号（;）结束，最后一个特征以句号（。）结束。
+- **示例**:
+  \`\`\`
+  申请人认为，修改后的权利要求1和对比文件1的区别技术特征至少是：
+  （1）[特征一的原文内容]；
+  （2）[特征二的原文内容]。
+  \`\`\`
+
+## 2. technicalProblemStatement
+- **内容**: 综合所有选定特征的beneficialEffect，提炼并定义出本申请实际解决的核心技术问题。
+- **格式**:
+  - 陈述必须以“基于上述区别技术特征，本申请修改后的权利要求1实际所要解决的技术问题是：”作为固定开头。
+  - 技术问题本身**必须**表述为“如何[动词]...”的句式，以清晰地反映技术方案达成的技术效果。
+  - 对要解决的技术问题的描述（“...”部分）**必须**，以清晰地反映技术方案和其达成的效果，强烈建议总字数控制在20个字以内。
+- **示例**:
+  \`\`\`
+  基于上述区别技术特征，本申请修改后的权利要求1实际所要解决的技术问题是：如何实现...。
+  \`\`\`
+
+## 3. effectsAnalysis
+- **内容**: 此部分是论证的核心。你需要针对每个区别特征，详细阐述其内在的技术逻辑——即该特征是如何在本申请的技术方案中发挥作用，并最终产生其对应的beneficialEffect的。
+- **格式**:
+  - 必须以“对于上述区别技术特征在本申请的技术方案中所起的作用，以及为解决上述技术问题所达到的技术效果，申请人分析如下：”作为固定开头。
+  - 对每个特征或特征组合的分析，应以“基于区别特征（1），...”、“基于区别特征（2），...”等形式开头。
+  - 如果特征间存在协同效应，可以合并分析，例如：“基于区别特征（1）和（2），...”。
+  - **每个特征/特征组的分析段落之间必须用一个换行符（\n）分隔，以确保清晰的结构**
+- **长度**: 总分析长度**必须**超过500个字符，为非显而易见性论证提供坚实基础。论述应构建一个清晰的逻辑链条：“因为采用了[特征X]的结构/方法 -> 所以能够实现[技术原理/动作Y] -> 最终带来了[有益效果Z]”。
+- **示例**:
+  \`\`\`
+  对于区别特征如何使发明解决上述技术问题、以及在发明中达到技术效果过程中的区别特征的作用，分析如下：
+  基于区别特征(1)，[详细分析特征一的作用和效果]。
+  基于区别特征(2)(3)，[详细分析特征二和三协同作用和效果]。
+  \`\`\`
+`;
+        const responseSchema = {
+            type: "OBJECT",
+            properties: {
+                featuresSummary: { type: "STRING" },
+                technicalProblemStatement: { type: "STRING" },
+                effectsAnalysis: { type: "STRING" }
+            },
+            required: ["featuresSummary", "technicalProblemStatement", "effectsAnalysis"]
+        };
+
+        const { response, cost } = await generateContentWithRetry({
+            model: 'gemini-2.5-pro',
+            contents: { parts: [{ text: prompt }] },
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: responseSchema,
+            },
+        });
+        oaReplyState.totalCost += cost;
+        
+        const resultText = response.text.trim();
+        try {
+            const parsed = JSON.parse(resultText);
+            oaReplyState.technicalProblemFeaturesSummary = parsed.featuresSummary;
+            oaReplyState.technicalProblemStatement = parsed.technicalProblemStatement;
+            oaReplyState.technicalProblemEffectsAnalysis = parsed.effectsAnalysis;
+        } catch(e) {
+            console.error("Failed to parse JSON for technical problem:", resultText);
+            throw new Error("模型返回了无效的数据格式。");
+        }
+
+    } catch (error) {
+        const err = error as Error;
+        console.error("Technical problem analysis generation failed:", err);
+        showToast(`技术问题分析生成失败: ${err.message}`, 5000);
+        // Don't change step, allow user to retry
+        oaReplyState.currentStep = 'amendment-explanation';
+    } finally {
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+    }
+};
+
+const generateNonObviousnessAnalysis = async () => {
+    const ai = getAi();
+    if (!ai) {
+        showToast('AI服务初始化失败，请刷新页面重试。');
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+        return;
+    }
+
+    try {
+        const context = `
+# **分析上下文**
+
+## **1. 区别技术特征汇总:**
+${oaReplyState.technicalProblemFeaturesSummary}
+
+## **2. 技术问题陈述:**
+${oaReplyState.technicalProblemStatement}
+
+## **3. 有益效果分析:**
+${oaReplyState.technicalProblemEffectsAnalysis}
+`;
+        
+        const fileToPart = async (file: File | null) => {
+            if (!file) return null;
+            const base64Data = await fileToBase64(file);
+            return {
+                inlineData: {
+                    mimeType: getMimeType(file.name),
+                    data: base64Data,
+                },
+            };
+        };
+        
+        const prompt = `
+# **角色**
+你是一位身经百战的中国资深专利代理人，逻辑严密，精通专利法及审查指南，且拥有敏锐的洞察力和卓越的战略思维。你的每一次下笔都旨在最大化地维护申请人的合法权益。你的论证风格是：尊重事实、引经据典、逻辑链条清晰、反驳有力且有节。你将严格遵循中国的“三步法”来构建非显而易见性（创造性）的论证。
+
+# **输入文件**
+你将收到一份分析上下文，以及一系列标记清晰的文件，包括：
+- **发明申请文件 (Application File)**
+- **审查意见通知书 (Office Action)**：这是所有引证文件的唯一事实来源。
+- **对比文件 (Reference Files)**：用户上传的对比文件。每个文件都有一个标签，如“对比文件1”或“其他对比文件”，并附带原始文件名。
+
+# **战略目标/任务**
+基于所提供的上下文（区别技术特征、技术问题、有益效果）**以及**所提供的对比文件的内容，你必须撰写一段有说服力且法律上严谨的非显而易见性论证。你将逐一分析区别特征，并针对每一个特征，对一个假设的审查员意见进行反驳。最终文本必须超过1500个字符。
+
+# **核心指令（最高优先级）**
+0.  **至高优先级 - 证据核查与事实确认（启动前必须完成）**：
+    - **核对对比文件来源**：仔细阅读“审查意见通知书”，提取其中明确引用的所有对比文件及其编号（例如，“对比文件1 CN12345A”，“对比文件2 US67890B”）。这是你必须引用的文件清单。
+    - **匹配上传文件**：将审查意见书中的文件清单与用户上传的“对比文件”进行匹配。**你的核心任务是找出哪个上传的文件对应审查意见书中的哪个对比文件编号**。你可以通过文件名中的公开号或文件内容来判断。
+    - **严格指代**：在你的答复中，**必须**严格使用审查意见通知书中的编号（例如“对比文件1”、“对比文件2”）来指代相应文件，即使用作证据的上传文件名或用户标签与之不同。例如，如果用户上传了名为\`patent_xyz.pdf\`的文件作为“其他对比文件”，而你通过内容确认它就是审查意见书中的“对比文件2”，那么你在答复中必须称之为“对比文件2”。
+    - **核对审查员论点**：你的所有反驳必须直接针对通知书中审查员提出的具体论点或结论。严禁反驳通知书中未提及的观点或凭空捏造反驳对象。
+
+1.  **最高优先级 - 概念严格分离**：你的论证必须严格区分“技术构思”和“作用”。对技术构思的分析必须以技术构思为结论；对作用的分析必须以作用为结论。**严禁**在同一点反驳中混合这两种推理思路。
+2.  **最高优先级 - 证据来源限制与准确性**：当引用对比文件时，你**必须**引用其**“具体实施方式”**部分的内容。**严禁**引用“权利要求书”中的证据。引用时，**必须确保段落标号和段落内容完全匹配，不得出现任何混淆或错配**。例如：“在对比文件4中，根据其说明书第[0027]段的记载‘[此处引用原文]’可知……”。
+3.  **反驳**：对于每个区别技术特征，首先陈述一个引用了所提供的某个对比文件的审查员意见，以断言式的短语“审查员认为，”开头。然后，构建一个详细的、逐点的反驳，以“对此，申请人并不认同，理由如下：”开头。“审查员认为，”部分，使用通知书中的原话或根据原话进行概括，不要针对通知书中未提及的论点或结论进行反驳。
+4.  **优先使用次要对比文件**：你的分析**必须优先**反驳与你收到的**次要对比文件**相关的审查员论点。
+5.  **选择最佳策略**：为你的反驳，从下方的“反驳策略手册”中选择最合适的论证策略，从下方的“反驳策略手册”中选择策略时，结合“反驳策略手册2”和“反驳策略手册3”，综合选择最合适的论证策略。
+6.  **格式要求**：对每个不同区别特征的分析**必须**用一个空行隔开。使用“2.1”、“2.2”等编号。
+7.  **长度要求**：总分析**必须超过1500个字符**。
+8.  **内容焦点**：输出应**仅**包含非显而易见性分析本身。不要重复所提供的上下文。
+9.  **无对话式前缀**：你的回复**必须**直接以分析的第一点开始（例如，“2.1、审查员认为...”）。不要包含任何介绍性短语、问候或解释。
+10. **最高优先级 **- 进行答复时，必须依据审查意见通知书中给出的对比文件（通知书第5条中，本通知书引用下列对比文件的部分），在生成相关内容后进行核对，如果回复时引用了通知书中提到的对比文件之外的文件内容，请重新生成回复。例如，如果通知书中只给出了对比文件1，也即只有一个对比文件，答复时，严禁使用其他对比文件进行分析。
+11. **最高优先级 **- 核对审查意见通知书中提及的对比文件数量，如果只有对比文件1，在分析时，仅允许针对对比文件1进行分析，禁止使用未在审查意见中提及的文件，核对无误后，再生成非显而易见性分析的内容。
+12. **最高优先级 **- 答复必须针对审查意见中提及的论点或结论进行，禁止凭空捏造审查意见中未提及的内容。
+13. **最高优先级 **- 在对对比文件进行分析时，检查对比文件是否在通知书中提及.例如，审查意见通知书中出现对比文件2（CN116558349A），当针对对比文件2的审查意见进行回复时，核实对比文件2与CN116558349A是否匹配，内容指代一致后，再进行回复。
+14. **最高优先级 **- 上传文件部分，其他对比文件的上传顺序可能是乱序的，因此，在针对通知书中提及的其他对比文件进行反驳时，以通知书中的对比文件个数为准。例如，上传时，先上传了对比文件3，但通知书中明确说明该对比文件为对比文件2，此时，按通知书进行回复。
+15. **最高优先级 - 学习对象与核心策略**：答复时，学习“参考知识”、“公众号-参考知识”以及“参考话术”中的内容，结合从“反驳策略手册”中选择的最合适的论证策略，针对审查意见中审查员的意见进行反驳，**并优先从作用的角度进行反驳**。
+16. **最高优先级 - 作用分析**：采用作用不同进行反驳时，得出作用不同后，必须说明区别特征在对比文件中不能起到其在本申请中所起到的何种作用。
+17. **最高优先级 - 策略应用**：从“反驳策略手册”中选择相应论证策略后，必须严格按照策略手册中的要求及格式进行反驳。
+
+
+#**参考知识**
+
+参照下述示例分析本发明对本领域的技术人员来说非显而易见的理由：
+
+判断要求保护的发明对本领域的技术人员来说是否显而易见
+从对比文件1和发明实际解决的技术问题出发，判断要求保护的发明对本领域的技术人员来说是否显而易见。判断过程中，要确定的是现有技术整体上是否存在某种技术启示，即各个对比文件和公知常识是否给出将上述区别特征应用到该最接近的现有技术（最接近的现有技术即是对比文件1）以解决其存在的技术问题(即发明实际解决的技术问题)的启示，这种启示会使本领域的技术人员在面对所述技术问题时，有动机改进该最接近的现有技术并获得要求保护的发明。如果现有技术存在这种技术启示，则发明是显而易见的，不具有突出的实质性特点。
+下述情况，通常认为现有技术中存在上述技术启示：
+(i)所述区别特征为公知常识，例如，本领域中解决该重新确定的技术问题的惯用手段，或教科书或者工具书等中披露的解决该重新确定的技术问题的技术手段。
+【例如】
+要求保护的发明是一种用铝制造的建筑构件，其要解决的技术问题是减轻建筑构件的重量。一份对比文件公开了相同的建筑构件，同时说明建筑构件是轻质材料，但未提及使用铝材。而在建筑标准中，已明确指出铝作为一种轻质材料，可作为建筑构件。该要求保护的发明明显应用了铝材轻质的公知性质。因此可认为现有技术中存在上述技术启示。
+(ii)所述区别特征为与最接近的现有技术相关的技术手段，例如，同一份对比文件其他部分披露的技术手段，该技术手段在该其他部分所起的作用与该区别特征在要求保护的发明中为解决该重新确定的技术问题所起的作用相同。
+【例如】
+要求保护的发明是一种氦气检漏装置，其包括：检测真空箱是否有整体泄漏的整体泄漏检测装置；对泄漏氦气进行回收的回收装置；和用于检测具体漏点的氦质谱检漏仪，所述氦质谱检漏仪包括有一个真空吸枪。
+对比文件1的某一部分公开了一种全自动氦气检漏系统，该系统包括：检测真空箱是否有整体泄漏的整体泄漏检测装置和对泄漏的氦气进行回收的回收装置。该对比文件1的另一部分公开了一种具有真空吸枪的氦气漏点检测装置，其中指明该漏点检测装置可以是检测具体漏点的氦质谱检漏仪，此处记载的氦质谱检漏仪与要求保护的发明中的氦质谱检漏仪的作用相同。根据对比文件1中另一部分的教导，本领域的技术人员能容易地将对比文件1中的两种技术方案结合成发明的技术方案。因此可认为现有技术中存在上述技术启示。
+(iii)所述区别特征为另一份对比文件中披露的相关技术手段，该技术手段在该对比文件中所起的作用与该区别特征在要求保护的发明中为解决该重新确定的技术问题所起的作用相同。
+【例如】
+要求保护的发明是设置有排水凹槽的石墨盘式制动器，所述凹槽用以排除为清洗制动器表面而使用的水。发明要解决的技术问题是如何清除制动器表面上因摩擦产生的妨碍制动的石墨屑。对比文件1记载了一种石墨盘式制动器。对比文件2公开了在金属盘式制动器上设有用于冲洗其表面上附着的灰尘而使用的排水凹槽。
+要求保护的发明与对比文件1的区别在于发明在石墨盘式制动器表面上设置了凹槽，而该区别特征已被对比文件2所披露。由于对比文件1所述的石墨盘式制动器会因为摩擦而在制动器表面产生磨屑，从而妨碍制动。对比文件2所述的金属盘式制动器会因表面上附着灰尘而妨碍制动，为了解决妨碍制动的技术问题，前者必须清除磨屑，后者必须清除灰尘，这是性质相同的技术问题。为了解决石墨盘式制动器的制动问题，本领域的技术人员按照对比文件2的启示，容易想到用水冲洗，从而在石墨盘式制动器上设置凹槽，把冲洗磨屑的水从凹槽中排出。由于对比文件2中凹槽的作用与发明要求保护的技术方案中凹槽的作用相同，因此本领域的技术人员有动机将对比文件1和对比文件2相结合，从而得到发明所述的技术方案。因此可认为现有技术中存在上述技术启示。
+【例如】
+专利申请的权利要求涉及一种改进的内燃机排气阀，该排气阀包括一个由耐热镍基合金Ａ制成的主体，还包括一个阀头部分，其特征在于所述阀头部分涂敷了由镍基合金Ｂ制成的覆层，发明所要解决的是阀头部分耐腐蚀、耐高温的技术问题。
+对比文件1公开了一种内燃机排气阀，所述的排气阀包括主体和阀头部分，主体由耐热镍基合金Ａ制成，而阀头部分的覆层使用的是与主体所用合金不同的另一种合金，对比文件1进一步指出，为了适应高温和腐蚀性环境，所述的覆层可以选用具有耐高温和耐腐蚀特性的合金。
+对比文件2公开的是有关镍基合金材料的技术内容。其中指出，镍基合金Ｂ对极其恶劣的腐蚀性环境和高温影响具有优异的耐受性，这种镍基合金Ｂ可用于发动机的排气阀。
+在两份对比文件中，由于对比文件1与专利申请的技术领域相同，所解决的技术问题相同，且公开专利申请的技术特征最多，因此可以认为对比文件1是最接近的现有技术。
+将专利申请的权利要求与对比文件1对比之后可知，发明要求保护的技术方案与对比文件1的区别在于发明将阀头覆层的具体材料限定为镍基合金Ｂ，以便更好地适应高温和腐蚀性环境。由此可以得出发明实际解决的技术问题是如何使发动机的排气阀更好地适应高温和腐蚀性的工作环境。
+根据对比文件2，本领域的技术人员可以清楚地知道镍基合金Ｂ适用于发动机的排气阀，并且可以起到提高耐腐蚀性和耐高溫的作用，这与该合金在本发明中所起的作用相同。由此，可以认为对比文件2给出了可将镍基合金Ｂ用作有耐腐蚀和耐高溫要求的阀头覆层的技术启示，进而使得本领域的技术人员有动机将对比文件2和对比文件1结合起来构成该专利申请权利要求的技术方案，故该专利申请要求保护的技术方案相对于现有技术是显而易见的。
+
+
+#**公众号-参考知识**
+参照下述示例分析本发明对本领域的技术人员来说非显而易见的理由：
+
+a1、“权利要求不符合《专利法》第22条第3款规定的创造性”是专利代理师在发明专利申请的审查过程中遇到的最常见的审查意见之一。在审查意见通知书中，审查员通常以区别技术特征被本领域对比文件公开且其在对比文件中所起的作用与该区别技术特征在本发明中所起的作用一样、或者认定区别技术特征为本领域的惯用技术手段或公知常识且其所能达到的技术效果是可以预见的为由来否定该发明的创造性。
+实践中，审查员通常会利用“三步法”来详细评价独立权利要求所要求保护的发明的创造性，即：（１）确定最接近的现有技术；（２）确定发明的区别特征和发明实际解决的技术问题；（３）判断要求保护的发明对本领域的技术人员来说是否显而易见。
+审查员在进行第（２）步和第（３）步的判断时，受到的主观因素的影响较大。在审查实践中，审查员通常过于关注发明的技术特征本身，而忽略了技术方案作为整体、其所要解决的技术问题以及所能实现的技术效果等方面，容易只从技术特征的角度出发，认为现有技术给出了将区别技术特征应用于最接近现有技术的技术启示，因而得出发明不具备创造性的结论。
+因此，在答复一些涉及创造性的审查意见时，代理人不仅可以考虑从发明的技术方案本身出发，还可以考虑从发明所属技术领域、所解决的技术问题和所产生的技术效果等各方面出发，将发明作为一个整体来考虑现有技术是否给出将区别技术特征应用于最接近现有技术的技术启示来进行答复，以便说服审查员接受权利要求的创造性，为申请人争取到合适的权利要求的保护范围。因此，技术领域、技术方案、技术问题和技术效果也是创造性答复中不容忽视的几个方面。
+关于“创造性”的法律依据
+我国《专利法》第二十二条规定，授予专利权的发明和实用新型，应当具备新颖性、创造性和实用性。创造性是指与现有技术相比，该发明具有突出的实质性特点和显著的进步，该实用新型具有实质性特点和进步。实用性是指该发明或者实用新型能够制造或者使用，并且能够产生积极效果。
+《专利审查指南》进一步规定，判断发明是否具有突出的实质性特点，就是要判断对本领域的技术人员来说，要求保护的发明相对于现有技术是否显而易见。如果要求保护的发明相对于现有技术是显而易见的，则不具有突出的实质性特点；反之，如果对比的结果表明要求保护的发明相对于现有技术是非显而易见的，则具有突出的实质性特点。
+此外，《专利审查指南》还规定了判断要求保护的发明相对于现有技术是否显而易见的第（３）步中，要从最接近的现有技术和发明实际解决的技术问题出发，判断要求保护的发明对本领域的技术人员来说是否显而易见。判断过程中，要确定的是现有技术整体上是否存在某种技术启示，即现有技术中是否给出将上述区别特征应用到该最接近的现有技术以解决其存在的技术问题（即发明实际解决的技术问题）的启示，这种启示会使本领域的技术人员在面对所述技术问题时，有动机改进该最接近的现有技术并获得要求保护的发明。如果现有技术存在这种技术启示，则发明是显而易见的，不具有突出的实质性特点。
+判断在现有技术中是否存在解决技术问题的技术启示，需要以所属领域的技术人员的视角，围绕发明实际解决的技术问题在现有技术中去寻找相关的技术手段。在判断现有技术公开的技术手段能否带来解决最接近现有技术存在的技术问题的技术启示时，应当从发明实际解决的技术问题出发，结合技术领域和技术方案等来考虑区别技术特征在发明中所起的技术作用，由此判断现有技术是否给出了解决该技术问题的技术启示。
+在现有技术客观存在着某种技术问题的情况下，如果所属领域的技术人员基于现有技术公开的信息能够意识到解决该问题的现实需要，且对将区别特征应用于最接近的现有技术进行改进后能使相应的技术问题得以解决形成合理的成功预期，则意味着所属领域的技术人员能够产生改进最接近现有技术的动机。
+以下笔者结合几个案例来就在创造性审查意见中关于“技术启示”判断时可从“技术问题”方面考量的一些探讨。
+案例分析对意识到技术问题的存在的判断所属领域的技术人员能够产生改进现有技术的动机的前提是能够意识到技术问题的存在。考察所属领域的技术人员是否有动机改进现有技术，是指所属领域的技术人员基于申请日以前的现有技术能否产生动机去进行改进，而不是在知晓了发明的技术方案之后，再去考虑现有技术是否存在进行改进的可能性，否则将陷入事后诸葛亮式的判断误区。在某些情况下，找到导致现有技术产生缺陷的技术问题或者确定该缺陷之所以存在的原因会成为解决技术问题的关键所在。
+案例一在本案的权利要求１中包括：使用用于升高窗帘的期望范围的提升力阈值来选择最佳的提升辅助机构，其中，所述期望范围包括用户施加到链条以操作所述窗帘从而避免所述链条太容易拉动而导致在所述窗帘上产生过大动量的最小量提升力，其中，所述期望范围包括所述用户施加到所述链条以操作所述窗帘并减少由所述用户拉动所述链条所施加的作用力的最大量的力。
+在审查意见中，审查员引用对比文件１作为最接近现有技术并且认为：对比文件１公开了一种用于电动窗用品的自动控制方法，并具体公开了以下技术特征：电机驱动单元相当于提升辅助机构，每个电动卷帘可以包括马达驱动单元(MDU)，马达驱动单元可以被配置成响应于经由数字通信链路从系统控制器接收的数字消息来调整窗上用品织物的位置，在一步骤中，当测得的脚烛中的光照水平小于黑暗阈值时，系统控制器向MDU的控制电路发出命令，以将组中的电动卷轴遮阳帘移动到黑暗遮阳板位置，该位置可以是完全打开位置，在另一步骤中，当光照水平大于暗阈值但小于亮阈值，并且预测到直射阳光时（即，当太阳入射角小于９０度时），系统控制器计算将穿透距离限制到期望的最大穿透距离的遮阳帘位置，并确定将穿透距离限制到期望的最大穿透距离的预测位置是否低于护目镜位置（相当于使用用于升高窗帘的期望范围来选择最佳的提升辅助机构(LAM)）。
+对此，在答复审查意见时申请人进行了意见陈述：对比文件１仅涉及到电动窗帘包括电机驱动单元，该电机驱动单元用于改变窗帘位置。然而，对比文件１中所公开“期望的遮阳帘位置”与本申请的权利要求１中的“期望范围的提升力阈值”完全不同，因此对比文件１并没有提及到“期望范围的提升力阈值”，更没有提及本申请的权利要求１中的对“期望范围”的进一步限定。对比文件１明确地记载了其目的在于可以自动控制电动窗帘，从而控制窗帘位置。基于对比文件１的内容可以看出，对比文件１的技术问题为如何控制窗帘位置。然而，在本申请中，权利要求１所要求保护的技术方案实际所要解决的技术问题为如何选择最佳的提升辅助机构来防止造成损坏。也就是说，对比文件１所要解决的技术问题完全不同于本发明所要解决的技术问题。因而，在对比文件１所记载的技术内容中，完全没有公开甚至提及或暗示使用如本申请的权利要求１所要求保护的技术方案中的“期望范围的提升力阈值”来选择最佳的提升辅助机构。就此而言，申请人认为，在没有阅读本申请的申请文件的情况下，本领域技术人员基于对比文件１自身所记载的技术内容的是不会有任何动机或理由会将对比文件１所公开的技术内容修改成如本申请的权利要求１包含的技术特征所限定的那样来“使用“期望范围的提升力阈值””来选择最佳的提升辅助机构”。
+基于以上分析内容，不管从所要解决的技术问题，还是为解决该技术问题所采用的技术手段来看，对比文件１都没有提及或教导有关上述区别技术特征的任何内容，无法提供在其中进一步应用上述区别技术特征以期获得如上所述本申请的权利要求１所要求保护的技术方案的任何启示。本申请的权利要求１所要求保护的技术方案相比于对比文件１是非显而易见的。
+此外，根据本申请原始提交的说明书的记载内容可以看出，在本申请的权利要求１所要求保护的技术方案中，通过采用上述区别技术特征，产生了如下有益效果：通过限定期望范围的提升力的最小力和最大力来帮助提升，从而防止造成损坏。换言之，本申请的独立权利要求１所包含的上述区别技术特征与其余技术特征在技术上相互关联且相互作用，并且在功能上相互支持，作为整体为本申请的独立权利要求１所要求保护的技术方案带来了如上所述的以及如说明书所述的新的有益的技术效果。
+鉴于上述，申请人认为，本申请的权利要求１所要求保护的技术方案具有突出的实质性特点和显著的进步，符合专利法第二十二条第三款的规定，具备创造性。
+在上述案例的后续审查中，审查员接受了专利申请人的以上意见陈述，认定本专利申请的权利要求１的创造性（案例来源于真实案件但具体表述上有修改）。
+从上述案例可以看出，所属领域的技术人员基于作为现有技术的对比文件１的公开内容，仅仅能够意识到其所要解决的技术问题为如何控制窗帘位置，而并不关注如何防止造成损坏。在这种情况下，本领域技术人员在没有阅读本申请的技术方案的情况下，并不能够意识到要为解决的技术问题“如何确定用于窗帘系统的最佳提升辅助机构，从而防止造成损坏”而采用区别技术特征，因此更不可能为解决该技术问题给出任何的技术启示，这就意味着所属领域的技术人员尚不具备改进该现有技术的动机。
+对使用本申请的技术手段来解决技术问题的必要性的判断现有技术的技术方案是由多个技术特征组成。在审查意见中，审查员倾向于将各个技术特征从技术方案中孤立出来，并且分别将各个技术特征与现有技术进行一一对比，找出本申请与现有技术的区别技术特征，然后再以区别技术特征被本领域其他对比文件公开且其在对比文件中所起的作用与该区别技术特征在本发明中所起的作用一样、或者认定区别技术特征为本领域的惯用技术手段或公知常识且其所能达到的技术效果是可以预见的为由来判断现有技术给出了解决该技术问题的技术启示。这样的认定过程往往忽略了技术特征之间的相互关联性即技术特征之间的结合本身，忽略了将技术方案作为整体并且结合技术领域、所要解决技术问题和所能实现的技术效果等来对发明的创造性进行总体判断。
+对此，专利代理师在应对此类创造性审查意见的过程中，可以结合技术领域、技术问题、技术手段和技术效果等因素，综合对现有技术所公开的技术内容是否能够给出将区别技术特征结合到最接近现有技术以对其技术方案进行改进给出相应的启示应结合技术问题等来进行分析。
+案例二在本案的权利要求１限定的系统中，所述系统包括机器学习模块，其中，所述机器学习模块包括多个子模块；其中，所述子模块至少包括预测模块、反应模块和维护模块；其中，所述预测模块包括第一预测算法，所述第一预测算法被配置为基于第一组接收到的操作特征数据来产生指示第一机械故障的可能性的至少第一预测通知；其中，所述第一组接收到的操作特征数据包括来自第一机器部件的第一组电流和电压数据；其中，所述第一预测算法模块被配置为基于确定所述第一组电流和电压数据内的第一测量数据点超过第一存储阈值来确定所述第一机械故障的可能性（其中省略了在本文中不进行讨论的特征）。
+在审查意见中，审查员引用对比文件１作为最接近现有技术并且认为：对比文件１公开了如下技术特征：所述系统起动控制流程包括如下步骤：步骤１：labVIEW控制系统获取电流传感器的信号，检测水泵工作电流是否超过极限值？如果是，转步骤２；（结合下文，公开了“其中，所述预测模块包括第一预测算法，所述第一预测算法被配置为基于第一组接收到的操作特征数据来产生指示第一机械故障的可能性的至少第一预测通知；其中，所述第一组接收到的操作特征数据包括来自第一机器部件的第一组电流；其中，所述第一预测模块被配置为基于确定所述第一组电流数据内的第一测量数据点超过第一存储阈值来确定所述第一机械故障的可能性”）。
+在答复审查意见中申请人陈述：本申请与对比文件１的区别技术特征为：所述第一组接收到的操作特征数据包括来自第一机器部件的第一组电流和电压数据；其中，所述第一预测算法模块被配置为基于确定所述第一组电流和电压数据内的第一测量数据点超过第一存储阈值来确定所述第一机械故障的可能性。对比文件１涉及一种带故障检测的远程控制智能园艺灌溉系统及其控制方法。对比文件１公开了以下内容：所述系统起动控制流程包括如下步骤：步骤１：labVIEW控制系统获取电流传感器的信号，检测水泵工作电流是否超过极限值？如果是，转步骤２；否则，转步骤３；步骤２：labVIEW控制系统发送信号控制水泵关闭，判定总电磁阀未开故障，labVIEW控制系统经GSM控制器向手机发送总电磁阀未开故障，结束；步骤３：labVIEW控制系统检测水泵工作电流是否为零？如果是，转步骤４，否则转步骤５；步骤４：labVIEW控制系统发送信号控制水泵关闭，再发送信号控制总电磁阀关闭；labVIEW控制系统判定水泵起动失败故障，labVIEW经GSM控制器向手机发送水泵起动失败故障，结束；步骤５：labVIEW控制系统发送信号控制水泵关闭；再发送信号控制总电磁阀关闭。就此而言，申请人认为，尽管对比文件１公开了使用一系列传感器，包括第一压力传感器、液位传感器和电流传感器，对比文件１公开的电流传感器是用于检测水泵的工作电流信号，并传递给labVIEW控制系统，labVIEW控制系统分析水泵是否正常工作，然而，对比文件１完全没有公开或提及“电压传感器”、“电压信号”或“电压数据”，并且对比文件１也没有公开或提及对电压也按照本申请的权利要求１所限定的方式被监测和利用以预测潜在的即将发生的故障。因此，对比文件１没有公开本申请的权利要求１的所有技术特征。
+此外，在本申请中，根据本申请公开文本的说明书并且参考本申请的附图可以看出，该示例性算法用于分析电流和电压传感器数据变化，并且本发明的系统可以使用电流传感器数据和电压传感器数据来确定第一机械故障的可能性。然而，在对比文件１中，根据对比文件１说明书，电流传感器用于检测水泵的工作电流信号，并传递给labVIEW控制系统，从而labVIEW控制系统分析水泵是否正常工作。基于对比文件１的公开，对比文件１的系统使用电流传感器就已经能够分析水泵是否正常工作，不再需要使用电压传感器数据来分析水泵是否正常工作。也就是说，对比文件１没有给出在对比文件１自身公开的内容的基础上进一步应用电压传感器数据的任何启示。因此，对比文件１没有暗示或教导与本申请的权利要求１的上述区别技术特征相对应的任何内容，并且无法提供在对比文件１自身公开的内容的基础上进一步应用上述区别技术特征的任何启示。
+此外，申请人认为，本申请的独立权利要求１所包含的上述区别技术特征与其余技术特征在技术上相互关联相互作用且在功能上相互支持，并且作为整体为本申请的独立权利要求１所要求保护的技术方案带来了如上所述的以及如说明书所述的新的有益的技术效果：根据本申请的权利要求１的技术方案，能够优选地应用机器学习和其他数据分析工具来提供预测性分析，包括辨别维护模式、地理趋势和环境趋势；本发明的算法提供预防性、预测性和反应性的维护分析和通知；并且本发明的算法可以优选地应用机器学习和其他数据分析工具来检测维护模式、地理趋势、环境趋势，并提供对未来事件的预测性分析。
+鉴于上述，申请人认为，本申请的权利要求１所要求保护的技术方案具有突出的实质性特点和显著的进步，符合专利法第二十二条第三款的规定，具备创造性。
+在上述案例的后续审查中，审查员接受了专利申请人提出的以上争辩意见，认同了本专利申请的权利要求１相对于对比文件１的创造性（案例来源于真实案件但具体表述上有修改）。
+从上述案例可以看出，一方面，专利代理师对审查员将权利要求中的技术特征割裂出来、然后通过将现有技术的技术特征进行简单拼凑和等同从而得出本申请的权利要求不具备创造性的结论这种认定方法提出了异议；另一方面，专利代理师从所属领域的技术人员的角度论述了，基于现有技术对比文件１的内容判断出，在对比文件１中已经使用技术方案解决了区别技术特征所要解决的技术问题，不再需要使用另外的技术特征来解决该技术问题，因此，在现有技术已经解决技术问题的基础上，所属领域的技术人员尚不具备应用该区别技术特征来改进该现有技术的动机。
+
+
+
+# **反驳策略手册（为每个特征选择最佳策略）**
+
+---
+### **情况A：审查员的意见缺乏事实依据（例如，仅引用了对比文件１）**
+*(审查员的意见纯粹基于推理，没有其他现有技术的证据。)*
+
+**策略**：引入一个常规技术手段作为“稻草人”，并论证本发明的特征是一种非常规的、具有创造性的步骤。
+**格式**：
+**２.１、审查员认为，**[审查员关于该特征显而易见的论点]。
+**对此，申请人并不认同，理由如下：**
+在对比文件１的基础上，本领域技术人员为了解决相应的技术问题通常所采用的改进手段是[描述常规方法]。例如[提供一个例子或引用专利作为证据]。
+本领域的公知常识中并未有将上述区别特征应用到对比文件１中以解决相应技术问题的技术方案。因此，上述区别特征并非是本领域技术人员为解决上述问题所采取的常规技术手段，而是申请人在付出创造性劳动后所作出的特殊设计，是申请人的智慧結晶。
+综上所述，本领域的公知常识并不能给出将上述区别特征应用到对比文件１中以解决相应技术问题的技术启示。所以，本领域技术人员很难想到，将对比文件１朝着本申请修改后的权利要求１的技术方案改进。
+
+---
+### **情况B：审查员的意见引用了其他对比文件作为证据**
+
+#### **B１. 对比文件并未公开该特征**
+*(审查员在事实认定上存在错误。)*
+
+**策略**：直接指出审查员认定中的事实错误。
+**格式**：
+**２.２、审查员认为，**对比文件２公开了[审查员声称公开的特征]。
+**对此，申请人并不认同，理由如下：**
+对比文件２公开了[描述该文件实际公开的内容]。经过分析可知，对比文件２并未公开上述区别特征[解释为什么没有公开]。
+所以，对比文件２并不能给出将上述区别特征应用到对比文件１中以解决相应技术问题的技术启示。
+
+#### **B２. 对比文件确实公开了相似的特征**
+*(反驳的核心是反对技术启示。)*
+
+**策略１：论证功能/效果不同**
+**格式**：
+**２.３、审查员认为，**对比文件２公开了[相似特征]，且其在对比文件２中与其在本申请中的作用相同，均是[审查员认定的功能]。
+**对此，申请人并不认同，理由如下：**
+首先，对比文件２中，根据其具体实施方式部分的说明书第*段记载的“[引用原文]”可知，上述区别特征在对比文件２中所起到的作用是：[在对比文件中的作用]。
+而本申请中，通过上述对区别特征的作用及技术效果的分析可知，该区别特征在本申请中所起到的作用是：[在本申请中的作用]。
+通过上述对比分析可知，上述区别特征在对比文件２中所起到的作用与其在本申请中所起到的作用并不相同，其在对比文件２中无法起到其在本申请中所起到的[在本申请中的关键作用]作用。
+因此，对比文件２不能给出将上述区别特征应用到对比文件１中以解决相应技术问题的技术启示。
+
+**策略２：论证设计构思不同 / 反向教导**
+**格式**：
+**２.４、审查员认为，**对比文件３公开了[相似特征]，本领域技术人员有动机将其应用到对比文件１中。
+**对此，申请人并不认同，理由如下：**
+首先，对比文件３中，根据其具体实施方式部分的说明书第*段记载的“[引用原文]”可知，其整体技术构思在于：[对比文件的设计构思]。
+而本申请中，其整体技术构思在于：[本申请的设计构思]。
+通过上述对比分析可知，对比文件３采用的是[对比文件的方法]，而本申请采用的是[本申请的方法]。可见，本申请采用了与对比文件３完全不同的技术构思。
+因此，在对比文件３给出的技术构思的教导下，本领域技术人员不会有动机将其应用到对比文件１中，甚至可以说对比文件３给出了与本申请相反的技术启示。
+
+**策略３：论证预料不到的技术效果 / 协同效应**
+**格式**：
+**２.５、审查员认为，**[审查员关于组合特征的论点]。
+**对此，申请人并不认同，理由如下：**
+本申请修改后的权利要求１中，区别特征[*]和区别特征[*]能够协同作用，起到了预料不到的技术效果。
+具体而言，[详细解释协同效应]。通过上述分析可知，本申请的上述技术特征能够在功能上彼此支持、作用上相互协同，共同解决同一技术问题、并产生相应技术效果。
+审查员将散落于不同现有技术中的零散技术特征进行拼凑，忽略了整体中各个特征相互的作用关系。本申请中这种将多种技术特征协同配合使用从而解决相应技术问题的技术手段并非本领域的公知常识。
+因此，现有技术并未给出将这些特征组合的技术启示。
+
+---
+### **情况C：审查员的推理不合逻辑**
+*(从本领域技术人员的角度看，审查员提出的组合是不合理的。)*
+
+**策略**：使用反证法，证明本领域技术人员会采取另一条更合逻辑的路径，而不会得出本发明。
+**格式**：
+**２.６、审查员认为，**[审查员的不合逻辑的论点]。
+**对此，申请人并不认同，理由如下：**
+在对比文件１的基础上，本领域技术人员为了解决相应的技术问题最容易想到的、最合理的改进方案是[描述最合逻辑的改进方案]。经过上述这种常规的改进后，其技术方案已具备和本申请修改后的权利要求１的技术方案基本相同的技术效果，不存在上述技术问题。
+即，本申请修改后的权利要求１的技术方案与该改进后的方案是具有相近技术效果的两种不同的技术方案。对本领域技术人员来说，在具备相近技术效果的前提下，并不会再画蛇添足，不会、也没有动机使其朝着本申请修改后的权利要求１的技术方案改进。
+因此，审查员的论述不符合本领域技术人员的认知逻辑。
+
+
+# **反驳策略手册2（为每个特征选择最佳策略）**
+第一类策略：重构“发明实际解决的技术问题”
+审查意见常常会错误地认定发明实际解决的技术问题，这是答复的常见突破口。
+１.１ 反驳过于“上位”或“下位”的技术问题定义 
+反驳“下位”定义：审查员有时会将发明的“区别技术特征”本身（即解决方案）错误地包含在“技术问题”的描述中（例如，问题被定义为“如何设置一个透光的装饰层”）。
+策略：应指出这是“后见之明”的循环论证。必须将技术问题重新定义为解决方案所达到的客观效果（例如，“如何在隐藏内部结构、保持美观的同时，实现背光指示”）。
+反驳“上位”定义：审查员有时会将技术问题概括得过于宽泛（例如，“如何确保装置正常前行”）。
+策略：应强调发明解决的特定技术难题，因为宽泛的问题对应着海量的现有技术。必须将问题聚焦到区别特征带来的特定技术效果（例如，“如何使清扫装置能够适应光伏面板宽度在一定范围内的变化而正常前行”）。
+１.２ 强调技术特征的“协同效果”，反驳审查员的割裂  审查员常将多个区别特征拆分开，分别论证其为“常规手段”。
+策略：论证这些区别技术特征之间存在“相互协调、密不可分”的关系，它们必须作为一个整体来共同解决一个更复杂的、单一技术手段无法解决的技术问题。
+应用（参数特征）：在电池等领域，多个参数特征（如 L/H、L/D、S/E）并非简单叠加，而是“协调联动”，共同实现了“提高能量密度、保证结构强度、同时满足散热需求”的整体发明构思。不能将它们拆开，分别认定为“常规尺寸选择”。
+应用（功能特征）：发明的贡献在于同一个结构实现了双重甚至矛盾的功能（例如，装饰层同时实现“不透明的装饰性”和“透光指示性” (a１５)）。审查员将其割裂为“装饰”和“透光”两个独立问题是错误的。
+第二类策略：挑战“技术启示”的认定
+这是“三步法”的第三步，也是答复的核心战场。审查员认为从现有技术（D１, D２, ...）或公知常识得到发明是显而易见的。
+２.１ 应对“常规技术手段”或“公知常识”的评述 当审查员声称某个区别特征是“公知常识”或“常规选择”时：
+策略一：技术问题不匹配（脱离场景）
+论证该“公知常识”在现有技术中是用来解决另一个完全不同的技术问题的。
+示例：公知常识中的“可拆卸连接”是为了“方便用户维修”，而本发明的“可拆卸隔板”是为了“提高产线部件通用性、兼容不同机型”。二者要解决的技术问题不同，因此公知常识未给出启示。
+策略二：最接近现有技术（D１）中无改进动机 
+论证 D１ 中根本不存在该“公知常识”所要解决的技术问题。
+示例：D１ 是“正方形”棚板，不存在“提高矩形棚板宽度方向强度”的技术问题，因此本领域技术人员没有动机在 D１ 基础上应用“设置条形孔”这一常规手段。
+策略三：反向举证
+主动检索并指出，在本发明之前，本领域解决类似问题的真正“常规手段”是另一种技术方案（例如，在旋钮“侧面”开透光窗），这恰恰证明了本发明的技术路径（在“正面”实现透光）并非常规，而是非显而易见的。
+２.２ 指出对比文件之间存在“结合障碍”  审查员常将 D１ 和 D２ 机械拼凑，必须指出二者结合存在技术壁垒。
+策略一：原理冲突或功能不兼容 
+论证 D２ 的技术特征与 D１ 的核心工作原理或发明目的相违背。
+示例：D１ 的技术方案要求“沉降”；而 D２ 的“搅拌器”会破坏“沉降”。将二者结合会导致 D１ 的方案失效，因此存在技术障碍。
+策略二：系统架构冲突（外延式整体分析）
+论证 D２ 的特征无法在 D１ 的整体系统环境或架构中应用。
+示例：D１ 采用的（Redis-Sentinel）集群架构明确要求“主节点只写、从节点只读”。审查员试图引入的“主节点响应读请求”这一特征会破坏 D１ 的整个系统架构设计，存在结合障碍。
+策略三：协同关系缺失
+论证本发明的区别特征（如“槽状结构”）之所以能产生技术效果，是依赖于本发明中的另一个技术特征（如“向外凸的弧面”）作为前提。
+但在 D１ 中，其对应的特征（如“定位条”）的发明目的恰恰是相反的（防止向外移动）。因此，D１ 根本不具备应用该区别特征的前提条件，没有改进动机。
+２.３ 论证“发明构思”的根本不同
+策略：从最高院的判例 出发，强调本申请为了实现克氏针折弯，采用的是“利用尖嘴钳头部作为旋转轴，外套触头旋转”的技术思路；而对比文件１采用的是“底座+拨块”的技术思路。
+二者在“具体结构、组成、位置关系、技术效果”上均存在明显差异，即“发明构思”完全不同。当发明构思存在明显差异时，本领域技术人员通常不会有动机在对比文件１的基础上进行改进以得到本发明，从而避免“后见之明”。
+２.４ 论证对比文件特征的“貌合神离”  审查员找到的 D２ 中的技术特征，可能只是字面上或表面上相似。
+策略一：工作原理不同（内延式整体分析）
+示例：本发明的加热系统通过“一次热量交换”即可工作；而 D１ 的系统需要“两次热量交换”。尽管部件名称相似（如“热交换器”），但其工作原理和连接关系完全不同。
+策略二：功能和作用不同
+示例：D２ 中也提到了“石墨烯量子点”和“荧光”。但 D２ 中，石墨烯是主体（吸附剂），荧光是测量手段（测分布）；而本发明中，石墨烯是辅料（敏化剂），荧光是目的（提高铽的发光效率）。二者功能和作用完全不同，D２ 不可能给出启示。
+策略三：应用场景（上下文）不同
+示例：本发明用“可收卷的魔术贴带子”在场地外收球；D２ 用“固定在墙上的魔术贴”粘球。尽管都用了“魔术贴”且都“不干扰球员”，但 D２ 是固定场地的一部分，而 D１（最接近现有技术）是移动小车。本领域技术人员没有动机将“移动小车”和“固定墙体”的方案结合。
+２.５ 论证“相反技术教导”或“技术偏见” 
+相反技术教导 ：需要谨慎使用。仅仅是 D１ 提到了某个方案的“缺点”，不等于“相反教导”。必须是 D１ 的教导会阻止或引导本领域技术人员偏离本发明的改进方向。
+技术偏见 ：指本领域对某个技术问题普遍存在的、偏离客观事实的认识。
+策略：证明本发明克服了这种行业偏见（例如，普遍认为铝线绕组不能用于大功率压缩机，而本发明通过改进使其可行）。这需要强有力的证据证明该“偏见”在申请日前的普遍存在性。
+第三类策略：针对特定发明类型的专门策略
+３.１ “转用发明”的答复策略 
+外观设计 ：论证用于“转用”或“组合”的启示，必须来自于相同或相近种类的产品。
+发明专利 ：论证该“转用”产生了新的技术问题。
+策略：指出最接近现有技术（如“吊索式座椅”）中并不存在本发明所要解决的技术问题（如“婴儿床组装时易撕裂布料”）。本发明的区别特征正是为了解决这个转用后才出现的新问题而设计的，因此并非显而易见的转用。
+３.２ “新兴领域”（如互联网、直播）发明的答复策略
+策略：承认底层技术（如参数定义）可能简单，但强调发明的贡献在于应用层面。论证本发明是基于对该新兴领域特定需求（如直播中礼物的多样性、互动性）的深刻理解而提出的合乎逻辑但非显而易见的改进。审查员不能脱离该领域的具体特点和需求，仅进行技术特征的简单拼凑。
+３.３ 使用“类比”简化复杂方案（迁移式整体分析） 
+策略：当技术方案过于复杂（如硬盘加密方法）时，使用一个简单、形象的生活类比来向审查员阐明本发明和对比文件在构思上的根本不同。
+示例：对比文件１如同“一个统一的钥匙管理员，根据身份和房号分发钥匙”；而本发明如同“一个风险评估系统，根据房间风险（位置、用途）来决定这个房间该配什么等级的锁”。二者解决问题的出发点完全不同。
+
+
+
+# **反驳策略手册3（为每个特征选择最佳策略）**
+第一类：基于“现有技术结合”的创造性否定
+策略１：论证发明构思不同，缺乏改进动机
+具体答复方式：
+引言部分：
+“审查员在审查意见通知书中指出，本申请权利要求１的技术方案可以通过将对比文件１和对比文件２相结合而显而易见地得到。申请人经过仔细研究后认为，该结合方式存在“后见之明”的缺陷。具体而言，本申请的技术方案建立在与对比文件１完全不同的发明构思之上，本领域技术人员在面对对比文件１时，缺乏将其改进以得到本申请技术方案的动机。理由如下：”
+主体分析部分（三步法）：
+剖析本申请的发明构思：
+“本申请的发明构思在于[此处精炼地描述本发明的核心技术思路]。例如，在ａ２案例中，本发明的核心构思是‘以尖嘴钳的头部本身作为旋转轴，使外部的触头围绕该头部旋转以实现克氏针的折弯’。该构思巧妙地将夹持工具和旋转轴心合二为一，旨在解决在夹持稳定的同时，实现紧凑、便捷的旋转折弯操作。”
+剖析最接近现有技术（对比文件１）的发明构思：
+“与此相对，对比文件１的发明构思是‘提供一个固定的底座（或基座），克氏针被定位在该底座上，一个独立的拨块（或杠杆）围绕底座上的旋转轴转动来实现折弯’。其设计理念是‘固定与运动分离’，即由底座负责稳定地固定，由拨块负责施加运动。这是两种截然不同的技术路径。”
+论证构思的根本性差异导致缺乏改进动机：
+“由此可见，本申请的‘夹持即轴心’构思与对比文件１的‘固定与运动分离’构思存在根本性差异。本领域技术人员在阅读对比文件１时，其全部技术教导都会引导他沿着‘如何优化固定底座’或‘如何改进独立拨块’的方向进行思考。他没有任何理由会想到要抛弃对比文件１的核心部件——固定的底座，并革命性地将其替换为一个本身就是操作工具的尖嘴钳，并进一步构想出让外部套管围绕这个尖嘴钳头部旋转的方案。这种改进并非对对比文件１的优化，而是对其设计哲学的全盘否定。”
+贬低其他对比文件（对比文件２）的启示作用：
+“尽管对比文件２公开了[提及对比文件２公开的特征，如‘尖嘴钳’]，但其仅仅揭示了该部件的常规用途，例如夹持。对比文件２完全没有给出‘将尖嘴钳的头部用作旋转轴，并外套一个可旋转的触头’这一关键的技术启示。因此，将对比文件２与构思完全不同的对比文件１进行结合，超出了本领域技术人员的正常逻辑推理能力。”
+结论部分：
+“综上所述，由于本申请与最接近的现有技术对比文件１的发明构思存在本质区别，本领域技术人员缺乏将二者结合的动机。审查员所指出的结合方式是基于已知本申请发明内容而进行的回溯性分析，属于“后见之明”。因此，本申请权利要求１具备突出的实质性特点和显著的进步，符合专利法第二十二条第三款的规定。”
+策略 ２：广义泛“技术启示” 
+具体答复方式：
+引言部分：
+“审查员认为，对比文件２公开了本申请的区别技术特征，并给出了将其应用于对比文件１的技术启示。申请人认为，虽然对比文件２表面上公开了名为[区别特征名称]的技术特征，但该特征在对比文件２中的作用、工作原理和应用环境与在本申请中完全不同。因此，对比文件２并未给出解决本申请实际解决的技术问题的任何有效启示。理由如下：”
+主体分析部分：
+明确本申请中区别特征的作用和要解决的问题：
+“在本申请中，区别技术特征‘[特征名称]’的作用是[描述其功能和原理]，旨在解决[明确本申请实际解决的技术问题]。例如，在ａ１６案例中，‘石墨烯量子点’的作用是作为敏化剂，通过能量转移来提高稀土元素的发光效率。”
+剖析该特征在对比文件２中的作用和解决的问题：
+“在对比文件２中，‘[特征名称]’的作用是[描述其在Ｄ２中的功能和原理]，其解决的是一个完全不同的技术问题：[明确Ｄ２解决的技术问题]。例如，在ａ１６案例中，对比文件２中的‘石墨烯量子点’的作用是高效吸附剂，其文献中提到的荧光性能仅仅是用来间接表征其分布是否均匀（从而判断吸附性能的好坏），而非用于敏化发光。其解决的是污水处理中如何高效吸附有机物的问题。”
+论证作用/原理/问题的不同导致无法给出启示：
+“可见，虽然技术术语相同，但该特征在两个技术方案中扮演着截然不同的角色。本领域技术人员在阅读对比文件２时，只会认识到[特征名称]可以作为[Ｄ２中的用途，如吸附剂]。他完全不会从中联想到，该特征还可以用于解决对比文件１中存在的[本申请解决的问题，如提高发光效率]的问题。这两个技术问题风马牛不及，对比文件２无法为本领域技术人员提供跨越这一认知鸿沟的桥梁。”
+结论部分：
+“因此，对比文件２并未给出将区别技术特征应用于对比文件１以解决本申请实际解决的技术问题的技术启示。审查员的结合评述割裂了技术特征与其所处的整体技术方案及功能背景，是不恰当的。本申请具备创造性。”
+策略３：论证存在“结合障碍”或“相反技术教导”
+具体答复方式：
+引言部分：
+“审查员建议将对比文件２公开的技术特征应用于对比文件１。申请人认为，这种结合在技术上是不可行的，或者说会与对比文件１的核心技术原理产生冲突，存在实质性的技术障碍。对比文件１甚至给出了与该改进方向相反的技术教导。理由如下：”
+主体分析部分：
+阐述对比文件１的核心工作原理/必要条件：
+“对比文件１的技术方案能够成立，其关键在于[描述其核心原理或必须依赖的技术条件]。例如，在ａ１２案例中，对比文件１的净化装置有效工作的前提是让水中的较大固体颗粒首先沉降下来，以避免后续过滤器堵塞。”
+分析引入区别特征后的冲突和后果：
+“如果按照审查员的意见，将本申请的区别技术特征‘[特征名称，如搅拌器]’引入对比文件１，将会直接破坏其上述核心工作原理。具体而言，‘搅拌器’会使水体剧烈搅动，导致已经或将要沉降的固体颗粒重新悬浮起来。这与对比文件１的‘先沉降’要求完全背道而驰，不仅无法优化对比文件１，反而会使其整个系统瘫痪或效率锐减。”
+指出“相反技术教导”：
+“实际上，对比文件１为了实现其[发明目的，如有效沉降]，其整体教导是引导本领域技术人员去维持水体的静置或平稳流动。任何会引起剧烈搅动的部件都是其设计思想所排斥的。因此，对比文件１的整体方案本身就构成了对‘增加搅拌器’这一技术手段的‘相反技术教导’，它会阻止而非鼓励本领域技术人员进行这样的改进。”
+结论部分：
+“综上所述，由于将区别技术特征应用于对比文件１存在不可调和的技术矛盾和结合障碍，本领域技术人员没有动机进行这种‘自毁长城’式的改进。因此，本申请的技术方案并非显而易见，具备创造性。”
+第二类：基于“常规技术手段/公知常识”的创造性否定
+具体答复方式：
+引言部分：
+“审查员认为，本申请的区别技术特征‘[特征名称]’属于本领域的常规技术手段/公知常识。申请人认为，审查员可能忽略了该区别技术特征在本申请的特定技术方案中所要解决的独特技术问题以及其带来的预料不到的技术效果。孤立地看，一个技术手段可能是常规的，但将其用于解决一个特定的、前人未曾关注的问题并取得良好效果，则体现了创造性。理由如下：”
+主体分析部分（核心是重新定义问题和效果）：
+驳斥审查员对技术问题的宽泛定义：
+“审查员将本发明实际解决的技术问题概括为[审查员定义的宽泛问题，如‘为了美观’或‘提供连接’]。申请人认为，这一定义过于上位，未能准确反映本发明的技术贡献。本发明实际要解决的，是一个更为具体和棘手的技术问题，即‘如何在[描述特定场景]的同时，实现[描述一个看似矛盾或难以兼得的目标]’。”
+“例如，在案例中，问题并非简单的‘增加装饰层’，而是‘如何让旋钮的同一个操作表面，在日常状态下呈现不透明的装饰性，隐藏内部结构，而在背光开启时又能均匀透光以显示指示符’。这是一个涉及美学与功能固有矛盾的技术难题。”
+阐述预料不到的技术效果：
+“通过采用‘[区别特征]’这一技术手段，本申请取得了[描述具体效果]的预料不到的技术效果。常规的[同类手段]只能实现[常规效果]，而无法达到本申请的[特殊效果]。例如，常规的装饰层要么完全不透光（牺牲背光），要么是透明/半透明的（无法有效隐藏内部结构），而本申请的方案首次在单一元件上实现了‘不透明装饰’与‘透光指示’的完美统一，这并非本领域技术人员可以轻易预见的。”
+（可选）进行反向举证：
+“事实上，现有技术中解决类似问题的常规思路是[引述其他现有技术或常识]，例如，在ａ１５案例中，‘将装饰面板做成不透明，而在侧面额外开设透光窗’。这恰恰证明了本领域技术人员的思维定势是‘分离’而非‘统一’这两个功能。本申请反其道而行之，克服了技术偏见，其非显而易见性是显而易见的。”
+结论部分：
+“因此，不能仅仅因为区别技术特征本身结构简单或为公众所知，就否定其创造性。关键在于该特征在本发明中用于解决的特定技术问题和产生的预料不到的技术效果。本申请的技术方案为本领域提供了一个全新的、非显而易见的解决方案，具备创造性。”
+第三类：基于“转用”的创造性否定
+具体答复方式：
+引言部分：
+“审查员认为本申请是将对比文件１的技术方案从[原领域]转用于[本申请领域]。申请人认为，此种转用并非简单的场景平移，而是在转用后产生了在原领域中根本不存在的、全新的技术问题，并且本申请的核心技术贡献恰恰在于通过创造性的技术改造解决了这一新问题。理由如下：”
+主体分析部分：
+分析原领域（对比文件１）不存在本申请的技术问题：
+“对比文件１的技术方案应用于[原领域]，其要解决的技术问题是[描述Ｄ１的问题]。在该应用场景下，它完全不会面临[描述本申请面临的新问题]的问题。例如，在ａ１４案例中，对比文件１的血管支架用于长期植入体内、数月内缓慢释放药物，其根本不存在‘如何在几秒钟的接触时间内将足量药物高效转移到血管壁’的技术难题。”
+阐述转用后产生的新技术问题：
+“然而，当本领域技术人员尝试将该技术转用于本申请的[新领域]时，一个全新的、在原领域中无法预见的技术问题便凸显出来，即：[清晰、具体地描述这个新问题]。这个新问题的出现，使得简单的技术平移变得毫无意义甚至完全失败。”
+论证本申请的区别特征是解决该新问题的创造性方案：
+“本申请权利要求１中的区别技术特征，即[列出区别特征]，正是申请人为解决上述‘新问题’而专门设计的、非显而易见的解决方案。例如，在ａ１４案例中，特定的药物与虫胶的比例，正是为了确保药物涂层既能在球囊折叠时牢固附着，又能在球囊扩张的瞬间迅速、大量地释放，从而解决了‘瞬时高效递药’这一全新难题。对比文件１中为‘缓释’而设计的配方，对此没有任何启示。”
+结论部分：
+“综上所述，本申请并非简单的技术转用，而是包含了一次创造性的‘问题发现’和一次创造性的‘问题解决’过程。其创造性体现在识别并解决了因技术转用而产生的新技术问题。因此，本申请具备创造性。”
+
+
+
+
+
+# **参考话术**
+在确定区别特征和实际解决的技术问题时，应当将共同配合实现某一特定功能和作用的多个技术特征作为一个整体，而不应将其割裂开来分别考虑。虽然涉案申请与最接近现有技术均涉及机械加工领域，但是如果二者的加工对象不同，导致其部件结构、作用以及相互连接关系均存在区别，且这些区别彼此有机关联并共同产生了特定的技术效果，则不应将这些区别特征割裂考虑并分别在现有技术中寻找技术启示。
+
+如申请人在一审答复所阐述的，本申请通过在轴承滚动过程中采集连续帧轴承图像，不仅用于获取用于缺陷识别的图像，还利用轴承滚动过程中裂纹与光照阴影在连续帧图像中的动态变化特征，引入当前帧图像的目标超像素块与其相邻帧轴承图像中的面积一致性以及面积变化率，对目标超像素块进行进一步分析，以提高裂纹区域判定的准确性。
+针对上述技术特征，审查员认为，将电机上的待检测轴承转动一圈，并使用相机拍摄轴承转动的视频是本领域的常规设置，对此，申请人表示认同。然而，本申请中是将其与裂纹区域的判定相联系，对轴承转动过程中裂纹与光照阴影在连续帧图像中的动态变化特征加以利用，使其作为裂纹区域判断的一个依据。申请人认为，将轴承转动的视频与裂纹区域判定相联系，依据当前帧图像的目标超像素块与其相邻帧轴承图像中的面积一致性以及面积变化率提高裂纹区域判定准确性的技术手段，并不是本领域中为解决相应技术问题所采用的常规技术手段。
+二审意见中，仅考虑了前者（拍摄轴承转动视频）的常规性，而忽略了轴承转动视频与裂纹区域判断之间的联系，进而忽略了上述联系在本申请的技术方案中所作出的贡献。因此，申请人认为，二审意见中的相应评述是缺乏说服力的。而且，利用轴承转动视频与裂纹区域判断之间的联系去解决相应的技术问题，显然不是本领域的公知常识，现有技术中也没有相关记载。因此，上述技术手段是申请人在付出创造性劳动后所作出的特殊设计，是申请人的智慧結晶。
+
+因为若上述区别技术特征真的为本领域的常规设置，则必然容易被检索发现于现有技术中，是本领域普遍采用的技术手段，但事实上并非如此。
+
+最后需要强调的是，本领域技术人员应该从整体上理解本申请的技术方案，将区别特征与权利要求中的其他技术特征作为一个整体考虑，权利要求１的技术方案是作为一个整体提供一种无风高低温试验装置，其每一个步骤都是彼此相关、具备协同作用的，如果将该技术方案割裂成一个个单独技术特征进行创造性的评估，即使每个技术特征单独来看有可能确实在现有技术中存在，但是，技术特征之间相互作用会带来预料不到的技术效果。
+
+一审意见中，审查员认为，“为了便于上料和下料，还包括两个联动机构一属于本领域技术人员所采取的常规技术手段”，并认为，“限定的两个联动机构一的具体结构和与相关部件的连接关系、配合关系，属于本领域的常规设计”。
+对此，申请人并不认同，理由如下：
+首先，目前审查意见并未提供有效的用于证明上述区别特征属于本领域的公知常识的证据。（注：根据审查指南第二部分第八章第４.１０.２.２（４）的规定：“在审查意见通知书中，审查员将权利要求中对技术问题的解决作出贡献的技术特征认定为公知常识时，通常应当提供证据予以证明。”）
+其次，《审查指南》中规定，对专利创造性审查中判断技术启示时，应当考虑“整体性”，在判断现有技术中的相关技术手段所起的作用时，同样应当遵从“整体性”判断原则，需考虑各技术特征之间的关联和协同作用，从而确定作用是否相同以及是否存在技术启示。
+具体到本申请中，通过上述１中对区别特征①②③的作用及其所达到的技术效果的分析可知，封堵板、滑板、具有推顶部的转杆、套管、铰接座二等结构之间紧密联系、相互依存，在滑板移动从而带动推爪夹持盖板的过程中，滑板同时能够顶推转杆并带动封堵板打开通道，使通道内的连接管落在盖板的正上方，实现盖板与连接管的同步放置。也即，本申请的上述技术特征能够在功能上彼此支持、作用上相互协同，共同解决同一技术问题、并产生相应技术效果。
+因此，在对上述区别特征①②③的相应技术特征进行评价时，应当从上述重新确定的技术问题出发，将其作为一个或一组特征来整体考量，而不能将其中部分单独拆分，简单地将散落于不同现有技术中的零散技术特征或者技术特征的局部拼凑在一起对其进行评价，导致忽略整体中各个特征相互的作用关系，以确保本申请中这种通过技术手段之间相互配合作出的贡献不会被忽略。
+申请人认为，本申请中这种将多种技术特征协同配合使用从而解决相应技术问题的技术手段显然不是本领域的公知常识。而且，申请人经过检索，在本申请的申请日之前，未在相关专利文献、教科书或技术文件中发现将上述技术特征协同配合使用的技术内容记载，也没有发现有本领域技术人员使用该技术解决本领域相关技术问题，因此，上述区别特征不属于本领域惯用技术手段。
+另外，通过上述１中对区别特征的作用及其所达到的技术效果的分析也可知，审查员所评价的“联动机构的具体结构和相关部件的连接关系、配合关系”（也即“设备构造细节”）正是申请人为解决相应技术问题所作出的特殊设计，是申请人的智慧結晶。且，为本领域技术人员所熟知的，“设备构造细节”往往是设备技术革新的主要着眼点，也是本领域技术人员为解决某一技术问题所采取的技术方案的创造性的集中体现。一审意见中，审查员在未检索相关文件的前提下就判定本申请中上述“设备构造细节”相关的技术特征是本领域的常规设置，显然是不具有说服力的。
+
+
+申请人认为“所述冷电联供系统包括：膨胀机、发电机、第一蒸发器、第二蒸发器、冷凝器、第一泵和第二泵”整体应为一个区别特征，不能将其中部分单独拆分，而忽略整体中各个特征相互的作用关系。
+《审查指南》中规定，对专利创造性审查中判断技术启示时，应当考虑“整体性”，在判断现有技术中的相关技术手段所起的作用时，同样应当遵从“整体性”判断原则，需考虑各技术特征之间的关联和协同作用，从而确定作用是否相同以及是否存在技术启示。
+具体到本申请中，
+
+在对比文件１的基础上，本领域技术人员为了解决相应的技术问题最容易想到的、最合理的改进方案是……。在对比文件１的基础上，经过上述这种常规的改进后，其技术方案中的……已具备和本申请修改后的权利要求１的技术方案基本相同的技术效果，不存在上述技术问题，即，本申请修改后的权利要求１的技术方案与该改进后的方案是具有相近技术效果的两种不同的技术方案，对本领域技术人员来说，在具备相近技术效果的前提下，并不会再画蛇添足，不会、也没有动机使其朝着本申请修改后的权利要求１的技术方案改进。另外，本领域的公知常识中并未有将上述区别特征应用到对比文件１中以解决相应技术问题的技术方案。因此，上述区别特征并非是本领域技术人员为解决上述问题所采取的常规技术手段，而是申请人在付出创造性劳动后所作出的特殊设计，是申请人的智慧結晶。
+
+通过上述１中对区别特征①②的作用及其所达到的技术效果的分析可知，曝气块与收集块、泡沫收集盘紧密联系、相互依存，通过对曝气块的位置进行限定，能够对泡沫破碎的时机进行控制，使收集块内收集的泡沫在发酵罐底部破碎，促进溶液与氧气的接触，提高溶液的发酵速率。也即，本申请的上述技术特征能够在功能上彼此支持、作用上相互协同，共同解决同一技术问题、并产生相应技术效果。
+《审查指南》中规定，对专利创造性审查中判断技术启示时，应当考虑“整体性”，在判断现有技术中的相关技术手段所起的作用时，同样应当遵从“整体性”判断原则，需考虑各技术特征之间的关联和协同作用，从而确定作用是否相同以及是否存在技术启示。
+因此，申请人认为，在对上述区别特征①②的相应技术特征进行评价时，应当从上述重新确定的技术问题出发，将其作为一个或一组特征来整体考量，而不能将其中部分单独拆分，简单地将散落于不同现有技术中的零散技术特征或者技术特征的局部拼凑在一起对其进行评价，导致忽略整体中各个特征相互的作用关系，以确保本申请中这种通过技术手段之间相互配合作出的贡献不会被忽略。
+
+
+目前审查意见并未提供有效的用于证明公知常识的证据。（注：根据审查指南第二部分第八章第４.１０.２.２（４）的规定：“在审查意见通知书中，审查员将权利要求中对技术问题的解决作出贡献的技术特征认定为公知常识时，通常应当提供证据予以证明。”）
+
+首先，如一审答复内容所阐述的，对比文件２并未公开上述区别特征①②，进而也不能给出将上述区别特征应用于对比文件１中以解决相应技术问题的技术启示。
+其次，通过上述１中对区别特征的作用及其所达到的技术效果的分析可知，审查员所评价的“设备构造细节不同”之处正是申请人为解决相应技术问题所作出的特殊设计，是申请人的智慧結晶。且，为本领域技术人员所熟知的，“设备构造细节”往往是设备技术革新的主要着眼点，也是本领域技术人员为解决某一技术问题所采取的技术方案的创造性的集中体现。二审意见中，审查员在未检索相关文件的前提下就判定本申请中“设备构造细节”相关的技术特征是本领域的常规设置，显然是不具有说服力的。
+
+如果技术方案中多个技术手段之间紧密联系、相互依存，共同解决同一技术问题、产生相应技术效果，则应当将其作为一个或一组特征来整体考量，以确保这种通过技术手段之间相互配合作出的贡献不会被忽略。
+
+
+首先，如上述１中所述，对比文件１并未公开本申请的上述区别特征①。而且，对比文件１中的设计构思是特意将吹除气喷出孔朝向吹向喷嘴的前端位置，且吹扫气的吹出方向与等离子气体的吹出方向之间具有较大的夹角（如下图３中所示），以使得吹除气能够将气刨切割过程中产生的熔渣进行有效吹除。
+而本申请中，设计构思则是将气环、气环等结构设置在密封套的一端，一方面，能够防止气盖凸出于密封套设置，避免气盖在转动的过程中与位于其下端的工件接触，防止电流短路；另一方面，也使得吹扫气的吹出方向与等离子气体的吹出方向之间具有较小的夹角（如下图４中所示），使得吹扫气吹向气熔池的后端，防止吹扫气正对气熔池吹扫时对气熔的形态造成破坏，保证等离子电弧刨削的稳定性。
+通过对比可知，本申请采用了与对比文件１不同的设计构思，且能够克服对比文件１中存在的缺陷，不仅能够预防电流短路，还能保证等离子电弧刨削的稳定性。
+
+
+
+需要说明的是，在现有技术并未给出相应的技术启示的情况下，审查员所认为的“常规技术手段”的想法，很大程度是在得知了本专利申请技术方案的基础上，将该专利申请的方案视为已知的知识范围，形成了对本领域技术人员所具有的知识和能力的扩大化理解。实际上，这种扩大既超出了本领域技术人员的知识，也超出了本领域技术人员所具有的常规技术能力。因此，申请人认为，只有在明确本领域技术人员所具有的合理的知识和能力的基础上，才能进行客观的创造性判断，并最终得出令申请人、公众信服的结论。
+
+
+虽然Ｄ１中的球状连振装置与本申请的超声滚轮同样具有传递超声波的作用，但不能忽略本申请超声滚轮的基本引导功能，Ｄ１中的球状连振装置不具备带着焊枪沿着焊缝移动的功能，故不能将本申请中超声滚轮所具有的双重作用割裂考虑，因此Ｄ１中的球状连振装置不能完全相当于超声滚轮。相应地，本申请权利要求１中与超声滚轮实现沿着焊缝移动的功能相关的技术特征也应当一并构成一个整体关联的区别技术特征，并客观确定其技术效果。Ｄ１的装置必需依附工作台进行焊接工作，该结构客观上决定了其适用于表面平坦试件的焊接。而本申请实际上是通过多个技术特征的共同作用、相互配合，实现了焊接装置的灵活性和适应性，虽然其未记载提高焊接质量外的其他技术效果，但本领域技术人员依据区别特征在技术方案中的客观技术效果，可以确定本申请实际解决的技术问题是如何实现焊接装置的灵活性和适应性。
+
+对于技术启示的判断，必须要考量区别技术特征的整体性。当一份现有技术不能完全公开对应解决同一个技术问题的区别技术特征，而需要进一步结合其他现有技术或公知常识时，不能将散落于不同现有技术中的零散技术特征或者技术特征的局部简单拼凑在一起，而是需要从该技术问题出发，考虑该另一现有技术或公知常识是否给出了解决该技术问题的技术启示，使本领域技术人员会将上述不同的现有技术与最接近的现有技术显而易见地结合。
+
+首先，如申请人在一审答复中所阐述的，对比文件５中是依据确定的障碍物坐标来确定斥力场的范围。而本申请中则是依据非确定性的烟雾浓度和烟雾位置的变化序列预测烟雾浓度maxfp，并依据预测值确定烟雾的影响范围。在确定斥力场（烟雾的影响范围）时，本申请采用了与对比文件５完全不同的设计构思。
+由于“确定值”和“预测值”之间具有较大的差异，申请人认为，本领域技术人员基于对比文件５的公开内容并没有动机采用“预测值”去确定烟雾的影响范围。同时，由于二审意见中也并未给出“采用预测值去确定烟霧的影响范围”的现有技术，申请人认为，在缺乏相应技术启示的情况下，本领域技术人员并不会、也不可能将对比文件５中的“确定值”替换为“预测值”，从而也没有动机使对比文件１朝着本申请权利要求１的技术方案改进。
+
+在评价“挡板”和“凸缘”的相应技术特征时应将其作为一个整体进行考虑，而不能将其中部分单独拆分，导致忽略整体中各个特征相互的作用关系。具体到本申请中，通过上述１中对区别特征①②③的作用及其所达到的技术效果的分析可知，本申请中对挡板的延伸位置以及凸缘的设置位置做出了进一步限定，以使得挡板和凸缘能够在功能上彼此支持，并取得新的技术效果。例如，本申请中将挡板部分延伸至第二传送带上的作用是使其与凸缘配合，使小于标准尺寸的物料和剩余物料能够沿着不同的移动轨迹向前移动，避免两者之间相互混合对分离效果产生影响，从而高效简便地实现不合格物料与剩余物料的分离。即本申请中挡板的设置并不仅仅是为了便于物料的导出，而是能够与凸缘协同配合，取得了新的技术效果，进而解决了相应的技术问题。
+
+而且，审查指南中也指出，“对于功能上彼此相互支持、存在相互作用关系的技术特征，应整体上考虑所述技术特征和它们之间的关系在要求保护的发明中所达到的技术效果”，因此，申请人认为，上述区别特征②和③是申请人在付出创造性劳动后所作出的特殊设计，是申请人的智慧結晶。
+
+对比文件１实际上并不存在试块完整性较差的技术问题，技术问题不存在的情况下，无论对比文件２以及其他的现有技术公开了何种技术方案，本领域技术人员均没有动机对对比文件１进行改进从而得到本申请的技术方案。
+
+重新确定的技术问题应当与区别特征在发明中所能达到的技术效果相匹配，不应当被确定为区别特征本身，也不应当包含对区别特征的指引或者暗示。
+
+对比文件１中的技术方案已经能够实现高效分离包装纸和糖胚的技术效果，其并不存在本申请的权利要求１实际所要解决的技术问题，也即，对比文件１的方案是与本申请的权利要求的技术方案具有相近技术效果的两种不同的设计方案，申请人认为，当对比文件１不存在专利所要解决的技术缺陷时，本领域技术人员将缺少改进的动机，对本领域技术人员来说，在具备相近技术效果的前提下，并不会再画蛇添足，不会、也没有动机使其朝着本申请的权利要求１的技术方案改进。
+
+退一步讲，即便本领域技术人员想要在对比文件１的基础上进一步提高包装材料与包装盒的分离效果，在对比文件１中“包装材料与内壁接触的部分被拉动并被拉离包装盒，从而实现包装材料与包装盒的分离”的设计构思的教导下，本领域技术人员容易想到的改进方向应当是增大包装材料与内壁接触的部分的相互作用力（也即阻碍包装材料与内壁发生相对运动），从而使得包装材料与内壁接触的部分更容易被拉动进而被拉离包装盒，而不会想到、且难以想到使其朝着本申请的权利要求１的技术方案改进。
+
+
+首先，对比文件２中涉及的技术领域为鞋底技术领域，而本申请中则涉及电缆技术领域，由于两者的技术领域差异较大，因此，将应用于“鞋底技术领域”中的相关技术特征在“电缆技术领域”中转用时，通常需要克服原技术领域中未曾遇到的困难。申请人认为，为提高电缆的抗压抗冲击性能，本领域技术人员并没有动机将“鞋底技术领域”中的“非牛顿流体气囊”转用到“电缆技术领域”中，从而也没有动机将上述技术特征应用于对比文件１中，而使其朝着本申请修改后的权利要求１的技术方案改进。
+其次，立足于电缆技术领域，为本领域技术人员所熟知的，由于电缆通常用于传输电能或信号，因此，本领域技术人员在设置电缆时，一般都需要做防水防潮处理，以避免电缆芯与水分接触。
+然而，“非牛顿流体”具有较大的含水量，这种特征显然不符合本领域中技术改进的常规发展方向，因此，即便“非牛顿流体气囊”已经被“鞋底技术领域”公开，本领域技术人员不会、也没有动机将其应用于对比文件１中，而使其朝着本申请修改后的权利要求１的技术方案改进。
+另外，本申请修改后的权利要求１中，通过上述１中对区别特征①的作用及其所达到的技术效果的分析可知，在受到冲击时，点冲击力首先挤压气态填充物，然后由气态填充物将冲击力传递到非牛顿流体上，而后再由非牛顿流体对冲击力进行分摊。也即，本申请中通过设置气态填充物和非牛顿流体，能够将电缆受到的点冲击力转化为面冲击力，再由非牛顿流体对冲击力进行分摊吸收，减小传递至电缆芯的作用力，提高电缆的抗冲击能力。
+而对比文件２中，根据说明书第００２４段记载的“通常增设鞋材主体使其形成具体的鞋垫形状，但鞋垫受力时，非牛顿流体气囊能够对不同的受力情况提供柔软或反弹的智能应变，使用户能够更加舒适的脚感以及更具支撑稳定性的减震效果”可知，非牛顿流体气囊设置在鞋子底部，受重力作用，对比文件２中的非牛顿流体气囊中的气体也是位于非牛顿流体上部的。由于鞋垫受到的力来自非牛顿流体下方，因此，在鞋垫受力时，非牛顿流体会先于与外部接触，从而使得压力直接作用到非牛ton流体上，由非牛ton流体对鞋底受到的力进行分散，从而起到良好的减震效果。
+通过上述对比分析可知，在受到冲击时，对比文件２中的点冲击力是直接作用于非牛顿流体，而本申请中则是先由气态填充物将点冲击力转化为面冲击力，再将压力传递给非牛顿流体，可见，对比文件２中的气态填充物并不能起到将点冲击力转化为面冲击力的作用。也即，非牛顿流体气囊在对比文件２中的作用与其在本申请中的作用并不相同，且其在对比文件２中并不能起到其在本申请中所起到的“将点冲击力转化为面冲击力，再由非牛顿流体将压力分摊吸收，从而减小传递至电缆芯的作用力”的作用。
+因此，对比文件２不能给出将上述区别特征①应用到对比文件１中以解决相应技术问题的技术启示。
+
+而且，退一步讲，若如审查员所论述的，采用上述替换是本领域的常规手段，且替换后的具有更高的去污力的技术效果可以预期，那么对本领域技术人员来说，为了获得具有更高的去污力，本领域技术人员采用上述手段也是不需要付出创造性劳动的，相应地，现有技术中应该会有关于上述技术手段的相关记载。然而，申请人经过检索，在本申请的申请日之前，未在相关专利文献、教科书或技术文件中发现与上述技术特征相关的技术内容记载，也没有发现有本领域技术人员使用该技术解决上述技术问题，因此，可以确定，上述假设是不成立的，上述“替换”并非本领域的常规替换，“替换”后的技术效果也是无法预期的。
+`;
+
+        const parts: any[] = [{ text: context }, { text: prompt }];
+
+        const addFileToParts = async (file: File | null, label: string) => {
+            if (file) {
+                const filePart = await fileToPart(file);
+                if (filePart) {
+                    parts.push({ text: `\n\n--- ${label} (${file.name}) ---\n` });
+                    parts.push(filePart);
+                }
+            }
+        };
+
+        // Add all files with clear labels
+        await addFileToParts(oaReplyState.files.application, '发明申请文件 (Application File)');
+        await addFileToParts(oaReplyState.files.officeAction, '审查意见通知书 (Office Action)');
+        await addFileToParts(oaReplyState.files.reference1, '对比文件1 (Reference File 1)');
+        
+        for (let i = 0; i < oaReplyState.files.otherReferences.length; i++) {
+            const file = oaReplyState.files.otherReferences[i];
+            await addFileToParts(file, `其他对比文件 ${i + 1} (Other Reference File ${i + 1})`);
+        }
+        
+        const contents = { parts };
+        
+        const { response, cost } = await generateContentWithRetry({
+            model: 'gemini-2.5-pro',
+            contents: contents,
+        });
+        oaReplyState.totalCost += cost;
+
+        oaReplyState.nonObviousnessAnalysisText = response.text.trim();
+    } catch (error) {
+        const err = error as Error;
+        console.error("Non-obviousness analysis generation failed:", err);
+        showToast(`非显而易见性分析生成失败: ${err.message}`, 5000);
+        oaReplyState.currentStep = 'technical-problem';
+    } finally {
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+    }
+}
+
+
+const generateFinalResponse = async () => {
+    const ai = getAi();
+    if (!ai) {
+        showToast('AI服务初始化失败，请刷新页面重试。');
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+        return;
+    }
+
+    try {
+        const assemblyPrompt = `
+# **任务**: 将以下上下文组装成一份完整的OA答复文件。
+
+# **上下文**:
+一、修改说明
+${oaReplyState.amendmentExplanationText}
+二、申请人认为，修改后的权利要求1具备创造性。
+1、区别技术特征的确定以及本发明实际所要解决的技术问题
+${oaReplyState.technicalProblemFeaturesSummary}
+${oaReplyState.technicalProblemStatement}
+${oaReplyState.technicalProblemEffectsAnalysis}
+2、非显而易见性的论述
+${oaReplyState.nonObviousnessAnalysisText}
+三、在修改后的权利要求1具有创造性的基础上，其从属权利要求也均具备创造性。
+
+# **输出模板**:
+尊敬的审查员：
+您好，感谢您对本申请的认真审查，申请人在阅读过审查意见后对申请文件进行修改并陈述意见如下：
+
+[此处插入“一、修改说明”的完整内容，包括标题]
+
+[此处插入“二、申请人认为...”的完整内容，包括其所有子部分1和2]
+
+[此处插入“三、在修改后的权利要求1...”的完整内容]
+
+以上为申请人针对审查意见所作的答复，谨与审查员老师商榷并恳请审查员接受，若申请人仍有叙述不详尽之处，恳请审查员给予申请人再一次陈述意见及修改申请文件的机会，申请人愿意以最大的诚意积极配合审查员工作，以加快审查进程，并使该申请能够得到授权；在申请不被驳回的前提下，申请人愿意接受审查员老师对本申请做出的主动修改。审查员也可以直接与代理人联系（……），以便申请人能够及时答复。
+最后，申请人对审查员认真细致的工作再次表示由衷地感谢！
+
+# **规则**:
+- 严格按照模板结构输出。
+- 格式的精确控制 (空行规则):
+- 在“一、修改说明”这一行之前，必须有且仅有一个空行。
+- 在“三、在修改后的权利要求1具有创造性的基础上，其从属权利要求也均具备创造性。”这一行之后，必须有且仅有一个空行。
+- 除此之外，在一、、二、、三、这些主要章节标题之间，以及章节内，不得有任何空行。
+- 无前缀输出: 你的输出必须直接以“尊敬的审查员：”开头。在此之前不得有任何字符。
+- 不要添加任何额外的前缀或解释。
+- 将所有提供的上下文部分无缝地组合成一个连贯的文档。
+`;
+
+        const { response, cost } = await generateContentWithRetry({
+            model: 'gemini-2.5-pro',
+            contents: { parts: [{ text: assemblyPrompt }] },
+        });
+        oaReplyState.totalCost += cost;
+
+        const finalResponseText = response.text.trim();
+        oaReplyState.finalResponseText = finalResponseText;
+
+        // Save to history
+        const newEntry = {
+          id: Date.now(),
+          date: new Date().toLocaleString('zh-CN', { hour12: false }),
+          files: {
+            application: oaReplyState.files.application?.name || null,
+            officeAction: oaReplyState.files.officeAction?.name || null,
+            reference1: oaReplyState.files.reference1?.name || null,
+            otherReferences: oaReplyState.files.otherReferences.map(f => f.name),
+          },
+          finalResponseText: finalResponseText
+        };
+        oaHistoryDb.addHistoryEntry(newEntry);
+        showToast('答复已生成并存入历史记录。');
+        
+    } catch (error) {
+        const err = error as Error;
+        console.error("Final response generation failed:", err);
+        showToast(`最终答复文件生成失败: ${err.message}`, 5000);
+        oaReplyState.currentStep = 'non-obviousness';
+    } finally {
+        oaReplyState.isLoading = false;
+        oaReplyState.loadingStep = null;
+        updateOAReplyView();
+    }
+}
+
+
+const attachOAContentEventListeners = () => {
+    // Step-specific listeners
+    if (oaReplyState.currentStep === 'upload-files') {
+        const fileInputs = document.querySelectorAll('input[type="file"]');
+        fileInputs.forEach(input => {
+            input.addEventListener('change', (e) => {
+                const target = e.target as HTMLInputElement;
+                const files = target.files ? Array.from(target.files) : [];
+                const inputId = target.id;
+
+                if (inputId === 'otherReferences') {
+                    oaReplyState.files.otherReferences.push(...files);
+                } else {
+                    oaReplyState.files[inputId] = files[0] || null;
+                }
+                updateFileListsDOM();
+                updateStartAnalysisButtonState();
+            });
+        });
+
+        const dropAreas = document.querySelectorAll('[data-upload-area]');
+        dropAreas.forEach(area => {
+            area.addEventListener('dragover', (e) => e.preventDefault());
+            area.addEventListener('drop', (e: DragEvent) => {
+                e.preventDefault();
+                const input = area.querySelector('input[type="file"]') as HTMLInputElement;
+                if (input && e.dataTransfer) {
+                    input.files = e.dataTransfer.files;
+                    const changeEvent = new Event('change', { bubbles: true });
+                    input.dispatchEvent(changeEvent);
+                }
+            });
+        });
+        
+        const startBtn = document.getElementById('start-analysis-btn');
+        if (startBtn) startBtn.addEventListener('click', handleStartAnalysis);
+        
+        updateFileListsDOM();
+        updateStartAnalysisButtonState();
+    }
+    
+    if (oaReplyState.currentStep === 'distinguishing-features') {
+        const confirmBtn = document.getElementById('confirm-features-btn');
+        if (confirmBtn) {
+            confirmBtn.addEventListener('click', async () => {
+                const selectedCheckboxes = document.querySelectorAll('#features-list input[type="checkbox"]:checked');
+                const newSelectedFeatures = Array.from(selectedCheckboxes).map(cb => {
+                    const index = parseInt((cb as HTMLElement).id.split('-')[1], 10);
+                    return oaReplyState.distinguishingFeatures[index];
+                });
+
+                if (newSelectedFeatures.length === 0) {
+                    showToast('请至少选择一个区别技术特征。');
+                    return;
+                }
+
+                const oldSelectionJSON = JSON.stringify(oaReplyState.selectedFeatures.map(f => f.feature).sort());
+                const newSelectionJSON = JSON.stringify(newSelectedFeatures.map(f => f.feature).sort());
+                const selectionChanged = oldSelectionJSON !== newSelectionJSON;
+
+                oaReplyState.selectedFeatures = newSelectedFeatures;
+
+                if (selectionChanged) {
+                    // If selection changed, invalidate all subsequent data
+                    oaReplyState.amendmentExplanationText = '';
+                    oaReplyState.technicalProblemFeaturesSummary = '';
+                    oaReplyState.technicalProblemStatement = '';
+                    oaReplyState.technicalProblemEffectsAnalysis = '';
+                    oaReplyState.nonObviousnessAnalysisText = '';
+                    oaReplyState.finalResponseText = '';
+                }
+
+                if (!oaReplyState.amendmentExplanationText) {
+                    oaReplyState.isLoading = true;
+                    oaReplyState.loadingStep = 'amendment-explanation';
+                    oaReplyState.currentStep = 'amendment-explanation';
+                    updateOAReplyView();
+                    await generateAmendmentExplanation();
+                } else {
+                    oaReplyState.currentStep = 'amendment-explanation';
+                    updateOAReplyView();
+                }
+            });
+        }
+    }
+    
+    if (oaReplyState.currentStep === 'amendment-explanation') {
+        const confirmBtn = document.getElementById('confirm-amendment-btn');
+        if (confirmBtn) {
+            confirmBtn.addEventListener('click', async () => {
+                const newText = (document.getElementById('amendment-explanation-text') as HTMLTextAreaElement).value;
+                const contentChanged = newText !== oaReplyState.amendmentExplanationText;
+                
+                // Always save user edits
+                oaReplyState.amendmentExplanationText = newText;
+
+                if (contentChanged) {
+                    // Invalidate subsequent steps if content changed
+                    oaReplyState.technicalProblemFeaturesSummary = '';
+                    oaReplyState.technicalProblemStatement = '';
+                    oaReplyState.technicalProblemEffectsAnalysis = '';
+                    oaReplyState.nonObviousnessAnalysisText = '';
+                    oaReplyState.finalResponseText = '';
+                }
+
+                if (!oaReplyState.technicalProblemFeaturesSummary) {
+                    oaReplyState.isLoading = true;
+                    oaReplyState.loadingStep = 'technical-problem';
+                    oaReplyState.currentStep = 'technical-problem';
+                    updateOAReplyView();
+                    await generateTechnicalProblemAnalysis();
+                } else {
+                    oaReplyState.currentStep = 'technical-problem';
+                    updateOAReplyView();
+                }
+            });
+        }
+    }
+
+    if (oaReplyState.currentStep === 'technical-problem') {
+        const confirmBtn = document.getElementById('confirm-problem-btn');
+        if (confirmBtn) {
+            confirmBtn.addEventListener('click', async () => {
+                const newSummary = (document.getElementById('features-summary') as HTMLTextAreaElement).value;
+                const newStatement = (document.getElementById('technical-problem-statement') as HTMLTextAreaElement).value;
+                const newAnalysis = (document.getElementById('effects-analysis') as HTMLTextAreaElement).value;
+
+                const contentChanged = newSummary !== oaReplyState.technicalProblemFeaturesSummary ||
+                                        newStatement !== oaReplyState.technicalProblemStatement ||
+                                        newAnalysis !== oaReplyState.technicalProblemEffectsAnalysis;
+
+                // Always save user edits
+                oaReplyState.technicalProblemFeaturesSummary = newSummary;
+                oaReplyState.technicalProblemStatement = newStatement;
+                oaReplyState.technicalProblemEffectsAnalysis = newAnalysis;
+
+                if (contentChanged) {
+                    // Invalidate subsequent steps if content changed
+                    oaReplyState.nonObviousnessAnalysisText = '';
+                    oaReplyState.finalResponseText = '';
+                }
+
+                if (!oaReplyState.nonObviousnessAnalysisText) {
+                    oaReplyState.isLoading = true;
+                    oaReplyState.loadingStep = 'non-obviousness';
+                    oaReplyState.currentStep = 'non-obviousness';
+                    updateOAReplyView();
+                    await generateNonObviousnessAnalysis();
+                } else {
+                    oaReplyState.currentStep = 'non-obviousness';
+                    updateOAReplyView();
+                }
+            });
+        }
+    }
+    
+    if (oaReplyState.currentStep === 'non-obviousness') {
+        const confirmBtn = document.getElementById('confirm-non-obviousness-btn');
+        if (confirmBtn) {
+            confirmBtn.addEventListener('click', async () => {
+                const newAnalysisText = (document.getElementById('non-obviousness-analysis') as HTMLTextAreaElement).value;
+                const contentChanged = newAnalysisText !== oaReplyState.nonObviousnessAnalysisText;
+                
+                // Always save user edits
+                oaReplyState.nonObviousnessAnalysisText = newAnalysisText;
+
+                if (contentChanged) {
+                    // Invalidate subsequent step
+                    oaReplyState.finalResponseText = '';
+                }
+                
+                if (!oaReplyState.finalResponseText) {
+                    oaReplyState.isLoading = true;
+                    oaReplyState.loadingStep = 'final-response';
+                    oaReplyState.currentStep = 'final-response';
+                    updateOAReplyView();
+                    await generateFinalResponse();
+                } else {
+                    oaReplyState.currentStep = 'final-response';
+                    updateOAReplyView();
+                }
+            });
+        }
+    }
+
+    if (oaReplyState.currentStep === 'final-response') {
+        const exportBtn = document.getElementById('export-word-btn');
+        if (exportBtn) {
+            exportBtn.addEventListener('click', () => {
+                const finalResponseText = (document.getElementById('final-response-text') as HTMLTextAreaElement).value;
+
+                try {
+                    const paragraphs = finalResponseText.split('\n').map(line =>
+                        new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: line,
+                                    font: '宋体',
+                                    size: 24, // 12pt (小四)
+                                })
+                            ],
+                            spacing: {
+                                line: 360, // 1.5 line spacing
+                            },
+                            indent: {
+                                firstLine: 480, // Two-character indent
+                            },
+                            alignment: docx.AlignmentType.JUSTIFIED,
+                        })
+                    );
+
+                    const doc = new docx.Document({
+                        sections: [{
+                            properties: {},
+                            children: paragraphs,
+                        }],
+                    });
+
+                    docx.Packer.toBlob(doc).then(blob => {
+                        saveAs(blob, "最终答复文件.docx");
+                        showToast('文件已开始下载！');
+                    });
+                } catch (error) {
+                    console.error("Error creating Word document:", error);
+                    showToast('导出Word文件时出错，请检查控制台获取更多信息。');
+                }
+            });
+        }
+    }
+
+    if (oaReplyState.currentStep === 'history') {
+        const detailButtons = document.querySelectorAll('.view-history-detail-btn');
+        detailButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const currentTarget = e.currentTarget as HTMLElement;
+                const id = currentTarget.dataset.historyId;
+                if (id) {
+                    oaReplyState.selectedHistoryId = parseInt(id, 10);
+                    updateOAReplyView();
+                }
+            });
+        });
+
+        const backBtn = document.getElementById('back-to-history-list');
+        if (backBtn) {
+            backBtn.addEventListener('click', () => {
+                oaReplyState.selectedHistoryId = null;
+                updateOAReplyView();
+            });
+        }
+    }
+};
+
+export const renderOaReplyPage = (appContainer: HTMLElement) => {
+    appContainer.innerHTML = `
+        <div id="oa-reply-page" class="w-full h-full flex flex-col bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-200">
+            <header class="flex justify-between items-center gap-4 p-5 md:p-8 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shrink-0">
+                <div class="flex items-center gap-4">
+                    <button id="back-to-dashboard" class="bg-transparent border-none text-gray-500 dark:text-gray-400 cursor-pointer p-2 rounded-full flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-white" aria-label="返回仪表盘">
+                        <span class="material-symbols-outlined">arrow_back</span>
+                    </button>
+                    <h2 class="text-3xl font-bold">OA答复助手</h2>
+                </div>
+                ${renderSettingsDropdown()}
+            </header>
+            <div class="flex flex-grow overflow-hidden">
+                ${renderOANav()}
+                <main class="flex-grow p-8 overflow-y-auto" id="oa-content-container">
+                    ${renderOAContent()}
+                </main>
+            </div>
+        </div>
+    `;
+    
+    const pageElement = document.getElementById('oa-reply-page');
+    if (pageElement) {
+        pageElement.addEventListener('click', (e) => {
+            const target = e.target as HTMLElement;
+
+            const navLink = target.closest('nav a[data-step]');
+            if (navLink) {
+                e.preventDefault();
+                const step = (navLink as HTMLElement).dataset.step;
+                if (step && step !== oaReplyState.currentStep) {
+                    if (step === 'history') {
+                        oaReplyState.selectedHistoryId = null; 
+                    }
+                    oaReplyState.currentStep = step;
+                    updateOAReplyView();
+                }
+                return;
+            }
+
+            const restartBtn = target.closest('#restart-oa');
+            if (restartBtn) {
+                oaReplyState = getInitialOAReplyState();
+                updateOAReplyView();
+                return;
+            }
+
+            const removeBtn = target.closest('.remove-file-btn');
+            if (removeBtn) {
+                const inputId = removeBtn.getAttribute('data-input-id');
+                const filename = removeBtn.getAttribute('data-filename');
+                if (!inputId || !filename) return;
+
+                const { files: currentFileState } = oaReplyState;
+                let updatedFiles;
+                let fileRemoved = false;
+                
+                if (inputId === 'otherReferences') {
+                    const newOtherRefs = currentFileState.otherReferences.filter(f => f.name !== filename);
+                    if (newOtherRefs.length < currentFileState.otherReferences.length) {
+                        updatedFiles = { ...currentFileState, otherReferences: newOtherRefs };
+                        fileRemoved = true;
+                    }
+                } else if (currentFileState[inputId] && (currentFileState[inputId] as File).name === filename) {
+                    updatedFiles = { ...currentFileState, [inputId]: null };
+                    fileRemoved = true;
+                }
+                
+                if (fileRemoved && updatedFiles) {
+                    oaReplyState = { ...oaReplyState, files: updatedFiles };
+                    updateFileListsDOM();
+                    updateStartAnalysisButtonState();
+                    showToast(`文件 "${filename}" 已移除。`);
+                }
+            }
+        });
+    }
+
+    updateOAReplyView();
+};
