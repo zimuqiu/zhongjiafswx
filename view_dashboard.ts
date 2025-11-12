@@ -5,43 +5,43 @@
 import { renderSettingsDropdown } from './shared_ui.ts';
 import { getCurrentUserProfile } from './shared_user.ts';
 
-export const renderUsernameSettingsView = (appContainer: HTMLElement) => {
+export const renderDashboard = (appContainer: HTMLElement) => {
+    const panels = [
+        { id: 'oa-reply', title: 'OA答复' },
+        { id: 'formal-quality-check', title: '形式质检' },
+        { id: 'substantive-quality-check', title: '实质质检' },
+        { id: 'priority-review-materials', title: '优审材料制作' }
+    ];
+
     const currentUser = getCurrentUserProfile();
-    const currentUsername = currentUser?.username || '';
-    const isAdmin = currentUser?.email === '2721750438@qq.com';
+    const hasPermission = (featureId) => {
+        if (!currentUser) return false;
+        return currentUser.role === 'admin' || (currentUser.permissions && currentUser.permissions.includes(featureId));
+    };
+
+    const accessiblePanels = panels.filter(panel => hasPermission(panel.id));
 
     appContainer.innerHTML = `
         <div class="w-full h-full flex flex-col bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-200">
-             <header class="flex justify-between items-center gap-4 p-4 md:p-6 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shrink-0">
-                <div class="flex items-center gap-4">
-                    <button id="back-to-dashboard" class="bg-transparent border-none text-gray-500 dark:text-gray-400 cursor-pointer p-2 rounded-full flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-white" aria-label="返回仪表盘">
-                        <span class="material-symbols-outlined">arrow_back</span>
-                    </button>
-                    <h2 class="text-3xl font-bold">用户名设置</h2>
-                </div>
+            <header class="flex justify-between items-center p-4 md:p-5 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 shrink-0">
+                <h2 class="text-2xl font-bold">功能选区</h2>
                 ${renderSettingsDropdown()}
             </header>
-            <main class="flex-grow p-5 md:p-8 overflow-y-auto">
-                <div class="max-w-xl mx-auto bg-white dark:bg-gray-800 p-8 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
-                    <form id="username-settings-form">
-                        <div class="space-y-6">
-                            <div>
-                                <label for="current-username" class="block text-sm font-medium text-gray-500 dark:text-gray-400">当前用户名</label>
-                                <input type="text" id="current-username" value="${currentUsername}" disabled class="mt-1 block w-full bg-gray-100 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm py-2 px-3 focus:outline-none sm:text-sm">
-                            </div>
-                            <div>
-                                <label for="new-username" class="block text-sm font-medium text-gray-700 dark:text-gray-300">新用户名</label>
-                                <input type="text" id="new-username" name="new-username" required class="mt-1 block w-full bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500 sm:text-sm" placeholder="请输入新的用户名" ${isAdmin ? 'disabled' : ''}>
-                                ${isAdmin ? '<p class="mt-2 text-sm text-yellow-600 dark:text-yellow-500">管理员用户名不允许修改。</p>' : ''}
-                            </div>
+            <main class="flex-grow p-5 md:p-8 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-8 overflow-y-auto content-start">
+                ${accessiblePanels.map(panel => `
+                    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 flex flex-col justify-between border border-gray-200 dark:border-gray-700 transition-all duration-200 cursor-pointer hover:-translate-y-1 hover:shadow-2xl hover:border-blue-500 h-[25vh]" data-view="${panel.id}">
+                        <div>
+                            <h3 class="text-2xl font-semibold mb-5">${panel.title}</h3>
                         </div>
-                        <div class="mt-8 text-right">
-                            <button type="submit" class="bg-blue-600 text-white font-bold py-2 px-6 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" ${isAdmin ? 'disabled' : ''}>
-                                保存更改
-                            </button>
+                        <div class="mt-auto text-right">
+                            <a href="#" class="text-blue-500 dark:text-blue-400 font-bold inline-flex items-center gap-2 group" data-view="${panel.id}">
+                                开始使用
+                                <span class="material-symbols-outlined transition-transform duration-200 group-hover:translate-x-1">arrow_forward</span>
+                            </a>
                         </div>
-                    </form>
-                </div>
+                    </div>
+                `).join('')}
+                 ${accessiblePanels.length === 0 ? '<p class="col-span-full text-center text-gray-500 dark:text-gray-400">暂无可用功能。请联系管理员分配权限。</p>' : ''}
             </main>
         </div>`;
 };
