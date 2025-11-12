@@ -648,6 +648,48 @@ const updateFormalCheckDOM = () => {
     if (startBtn) startBtn.disabled = !formalCheckState.file;
 };
 
+const attachFileInputListeners = () => {
+    const fileInput = document.getElementById('formal-check-file') as HTMLInputElement;
+    if (fileInput) {
+        fileInput.addEventListener('change', (e) => {
+            const target = e.target as HTMLInputElement;
+            const file = target.files ? target.files[0] : null;
+            if (file) {
+                if (file.type !== 'application/pdf') {
+                    showToast('请上传PDF格式的文件。');
+                    target.value = '';
+                    return;
+                }
+                formalCheckState.file = file;
+                updateFormalCheckDOM();
+            }
+        });
+
+        const dropArea = fileInput.closest('[data-upload-area]');
+        if (dropArea) {
+            dropArea.addEventListener('dragover', (e) => e.preventDefault());
+            dropArea.addEventListener('drop', (e: DragEvent) => {
+                e.preventDefault();
+                if (e.dataTransfer) {
+                    fileInput.files = e.dataTransfer.files;
+                    const changeEvent = new Event('change', { bubbles: true });
+                    fileInput.dispatchEvent(changeEvent);
+                }
+            });
+        }
+    }
+    updateFormalCheckDOM();
+};
+
+const updateView = () => {
+    const sidebarContainer = document.querySelector('#formal-check-page aside');
+    if (sidebarContainer) {
+        sidebarContainer.outerHTML = renderFormalCheckSidebar();
+    }
+    reRenderContent();
+    attachFileInputListeners();
+}
+
 const attachFormalCheckEventListeners = () => {
     const pageElement = document.getElementById('formal-check-page');
     if (!pageElement) return;
@@ -695,49 +737,19 @@ const attachFormalCheckEventListeners = () => {
         if (historyBtn) {
             formalCheckState.viewMode = (formalCheckState.viewMode === 'main') ? 'historyList' : 'main';
             formalCheckState.selectedHistoryId = null;
-            renderFormalQualityCheckPage(document.getElementById('app')!);
+            updateView();
             return;
         }
 
         const resetBtn = target.closest('#reset-formal-check-btn');
         if (resetBtn) {
             resetFormalCheckState();
-            renderFormalQualityCheckPage(document.getElementById('app')!);
+            updateView();
             return;
         }
     });
-
-    const fileInput = document.getElementById('formal-check-file') as HTMLInputElement;
-    if (fileInput) {
-        fileInput.addEventListener('change', (e) => {
-            const target = e.target as HTMLInputElement;
-            const file = target.files ? target.files[0] : null;
-            if (file) {
-                if (file.type !== 'application/pdf') {
-                    showToast('请上传PDF格式的文件。');
-                    target.value = '';
-                    return;
-                }
-                formalCheckState.file = file;
-                updateFormalCheckDOM();
-            }
-        });
-
-        const dropArea = fileInput.closest('[data-upload-area]');
-        if (dropArea) {
-            dropArea.addEventListener('dragover', (e) => e.preventDefault());
-            dropArea.addEventListener('drop', (e: DragEvent) => {
-                e.preventDefault();
-                if (e.dataTransfer) {
-                    fileInput.files = e.dataTransfer.files;
-                    const changeEvent = new Event('change', { bubbles: true });
-                    fileInput.dispatchEvent(changeEvent);
-                }
-            });
-        }
-    }
     
-    updateFormalCheckDOM();
+    attachFileInputListeners();
 };
 
 export const renderFormalQualityCheckPage = (appContainer: HTMLElement) => {
