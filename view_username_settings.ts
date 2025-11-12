@@ -8,7 +8,7 @@ import { getCurrentUserProfile } from './shared_user.ts';
 export const renderUsernameSettingsView = (appContainer: HTMLElement) => {
     const currentUser = getCurrentUserProfile();
     const currentUsername = currentUser?.username || '';
-    const isAdmin = currentUser?.email === '2721750438@qq.com';
+    const isAdmin = currentUser?.role === 'admin';
 
     appContainer.innerHTML = `
         <div class="w-full h-full flex flex-col bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-200">

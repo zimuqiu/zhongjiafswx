@@ -91,31 +91,9 @@ const navigateTo = async (view) => {
 
 // --- HELPERS ---
 const loadAndSetUserProfile = async (user) => {
-    // Self-healing mechanism for the admin account
-    if (user.email === '2721750438@qq.com') {
-        const adminDocRef = firestore.collection("users").doc(user.uid);
-        const adminDoc = await adminDocRef.get();
-        if (!adminDoc.exists) {
-            showToast('管理员账户资料不存在，正在自动修复...', 2000);
-            const adminProfileData = {
-                email: user.email,
-                username: 'cuihao',
-                role: 'admin',
-                permissions: ['oa-reply', 'formal-quality-check', 'substantive-quality-check', 'priority-review-materials']
-            };
-            await adminDocRef.set(adminProfileData);
-            showToast('管理员账户已修复。');
-        }
-    }
-
     const userDoc = await firestore.collection("users").doc(user.uid).get();
     if (userDoc.exists) {
         const profileData: any = { uid: user.uid, ...userDoc.data() };
-        // Enforce admin username on login
-        if (profileData.email === '2721750438@qq.com' && profileData.username !== 'cuihao') {
-            await firestore.collection("users").doc(user.uid).update({ username: 'cuihao' });
-            profileData.username = 'cuihao';
-        }
         setCurrentUserProfile(profileData);
         return true; // Indicates success
     } else {
@@ -200,13 +178,12 @@ const handleAuthFormSubmit = async (e) => {
                     if (!usernameQuery.empty) {
                         throw new Error('该用户名已被使用，请选择其他用户名。');
                     }
-
-                    const isAdmin = email === '2721750438@qq.com';
+                    
                     const profileData = {
                         email: tempUser.email,
-                        username: isAdmin ? 'cuihao' : username,
-                        role: isAdmin ? 'admin' : 'user',
-                        permissions: isAdmin ? ['oa-reply', 'formal-quality-check', 'substantive-quality-check', 'priority-review-materials'] : []
+                        username: username,
+                        role: 'user',
+                        permissions: []
                     };
                     await firestore.collection("users").doc(tempUser.uid).set(profileData);
                     await auth.signOut();
