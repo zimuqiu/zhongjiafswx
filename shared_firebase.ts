@@ -11,15 +11,25 @@ import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
 
-// TODO: 用您应用的 Firebase 项目配置替换以下内容
-// 参见: https://firebase.google.com/docs/web/setup#available-libraries
+// Firebase configuration is loaded from environment variables.
+// Your build tool (like Vite, Create React App, etc.) should be configured
+// to load variables from a `.env.local` file into `process.env`.
+//
+// IMPORTANT: Most modern build tools require a specific prefix for environment
+// variables to be exposed to the client-side browser code for security reasons.
+// For example:
+// - Vite requires the prefix `VITE_` (e.g., VITE_FIREBASE_API_KEY)
+// - Create React App requires the prefix `REACT_APP_` (e.g., REACT_APP_FIREBASE_API_KEY)
+//
+// Please ensure your `.env.local` file uses the correct variable names with the
+// required prefix for your project's build setup.
 const firebaseConfig = {
-   apiKey: "AIzaSyAr7Cm0_FN9Ulmjg8DUf9b5pqo7-eI8mDE",
-  authDomain: "aifswx.firebaseapp.com",
-  projectId: "aifswx",
-  storageBucket: "aifswx.firebasestorage.app",
-  messagingSenderId: "724723964501",
-  appId: "1:724723964501:web:a4f1cb6ff3f273778d92dc"
+  apiKey: process.env.FIREBASE_API_KEY,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.FIREBASE_APP_ID
 };
 
 // Initialize Firebase App
