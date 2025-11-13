@@ -11,20 +11,25 @@ import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
 
-// TODO: 用您应用的 Firebase 项目配置替换以下内容
-// 参见: https://firebase.google.com/docs/web/setup#available-libraries
+// These configuration values are injected by the build environment (e.g., Vercel).
+// DO NOT hardcode secrets here. Set them in your Vercel project's Environment Variables.
+// The `PUBLIC_` prefix is a convention to denote variables safe for client-side exposure.
 const firebaseConfig = {
-   apiKey: "AIzaSyAr7Cm0_FN9Ulmjg8DUf9b5pqo7-eI8mDE",
-  authDomain: "aifswx.firebaseapp.com",
-  projectId: "aifswx",
-  storageBucket: "aifswx.firebasestorage.app",
-  messagingSenderId: "724723964501",
-  appId: "1:724723964501:web:a4f1cb6ff3f273778d92dc"
+  apiKey: process.env.PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.PUBLIC_FIREBASE_APP_ID
 };
 
 // Initialize Firebase App
 if (!firebase.apps.length) {
-    firebase.initializeApp(firebaseConfig);
+    if (!firebaseConfig.apiKey) {
+        console.error("Firebase configuration is missing. Make sure environment variables are set.");
+    } else {
+        firebase.initializeApp(firebaseConfig);
+    }
 }
 
 // Get and export Firebase services
