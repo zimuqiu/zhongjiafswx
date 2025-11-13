@@ -16,12 +16,13 @@ import "firebase/compat/firestore";
 // SECURE: Replaced hardcoded keys with environment variables for Vercel deployment.
 // You must set these variables in your Vercel project settings.
 const firebaseConfig = {
-   apiKey: process.env.VITE_FIREBASE_API_KEY,
-  authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.VITE_FIREBASE_APP_ID
+ apiKey: "AIzaSyAr7Cm0_FN9Ulmjg8DUf9b5pqo7-eI8mDE",
+  authDomain: "aifswx.firebaseapp.com",
+  projectId: "aifswx",
+  storageBucket: "aifswx.firebasestorage.app",
+  messagingSenderId: "724723964501",
+  appId: "1:724723964501:web:a4f1cb6ff3f273778d92dc",
+  measurementId: "G-KWNRVCJ88X"
 };
 
 // Initialize Firebase App
@@ -32,3 +33,4 @@ if (!firebase.apps.length) {
 // Get and export Firebase services
 export const auth = firebase.auth();
 export const firestore = firebase.firestore();
+
