@@ -11,10 +11,11 @@ import { showToast } from './shared_ui.ts';
 import { renderLoginView, renderRegisterView, renderForgotPasswordView } from './view_auth.ts';
 import { renderDashboard } from './view_dashboard.ts';
 import { renderUserManagementView, handleUserPermissionsFormSubmit, handleUserSearch, attachUserManagementListener } from './view_user_management.ts';
-import { renderOaReplyPage } from './feature_oa_reply.ts';
-import { renderFormalQualityCheckPage, resetFormalCheckState } from './feature_formal_quality_check.ts';
-import { renderSubstantiveQualityCheckPage } from './feature_substantive_quality_check.ts';
-import { renderPriorityReviewMaterialsPage } from './feature_priority_review_materials.ts';
+import { renderOaReplyPage } from './view_oa_reply.ts';
+import { renderFormalQualityCheckPage } from './view_formal_quality_check.ts';
+import { resetFormalCheckState } from './feature_formal_quality_check.ts';
+import { renderSubstantiveQualityCheckPage } from './view_substantive_quality_check.ts';
+import { renderPriorityReviewMaterialsPage } from './view_priority_review_materials.ts';
 // Username settings view is no longer used.
 
 // --- APP STATE & ROUTER ---
