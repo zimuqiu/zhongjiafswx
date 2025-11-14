@@ -11,15 +11,16 @@ import firebase from "firebase/compat/app";
 import "firebase/compat/auth";
 import "firebase/compat/firestore";
 
-// TODO: 用您应用的 Firebase 项目配置替换以下内容
-// 参见: https://firebase.google.com/docs/web/setup#available-libraries
+// Your Firebase project configuration should now be set in your deployment environment's
+// environment variables (e.g., in Vercel). This prevents exposing sensitive keys
+// directly in the source code.
 const firebaseConfig = {
-   apiKey: "AIzaSyAr7Cm0_FN9Ulmjg8DUf9b5pqo7-eI8mDE",
-  authDomain: "aifswx.firebaseapp.com",
-  projectId: "aifswx",
-  storageBucket: "aifswx.firebasestorage.app",
-  messagingSenderId: "724723964501",
-  appId: "1:724723964501:web:a4f1cb6ff3f273778d92dc"
+  apiKey: process.env.FIREBASE_API_KEY,
+  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.FIREBASE_PROJECT_ID,
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.FIREBASE_APP_ID
 };
 
 // Initialize Firebase App
