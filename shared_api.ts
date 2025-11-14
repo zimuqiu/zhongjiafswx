@@ -22,6 +22,8 @@ const calculateCost = (inputChars: number, outputChars: number): number => {
 // --- GEMINI API ---
 let ai;
 try {
+    // Use `import.meta.env` for client-side variables, prefixed with `VITE_`.
+    // FIX: Per coding guidelines, the API key must come from process.env.API_KEY. This also resolves the TypeScript error.
     ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 } catch (error) {
     console.error("Failed to initialize GoogleGenAI:", error);
