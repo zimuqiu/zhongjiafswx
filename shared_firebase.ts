@@ -2,14 +2,14 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-// This file initializes Firebase using the v9 compatibility layer to maintain
-// the v8 namespaced API syntax used throughout the application. This ensures
-// that existing code continues to work without a full migration to the v9 modular API.
+// This file initializes Firebase using the globally available `firebase` object
+// provided by the official Firebase CDN scripts (UMD bundles). This approach
+// avoids ES module resolution issues encountered with third-party CDNs like esm.sh
+// and provides a more stable and reliable integration.
 
-// FIX: Switched to Firebase v9 compat imports to fix type errors while preserving v8 syntax.
-import firebase from "firebase/compat/app";
-import "firebase/compat/auth";
-import "firebase/compat/firestore";
+// Declare the global firebase object for TypeScript. This object is attached to
+// the window scope by the scripts loaded in index.html.
+declare const firebase: any;
 
 // TODO: 用您应用的 Firebase 项目配置替换以下内容
 // 参见: https://firebase.google.com/docs/web/setup#available-libraries
@@ -22,11 +22,12 @@ const firebaseConfig = {
   appId: "1:724723964501:web:a4f1cb6ff3f273778d92dc"
 };
 
-// Initialize Firebase App
+// Initialize Firebase App.
+// Check if the app is already initialized to prevent errors on hot-reloads.
 if (!firebase.apps.length) {
     firebase.initializeApp(firebaseConfig);
 }
 
-// Get and export Firebase services
+// Get and export Firebase services from the global object.
 export const auth = firebase.auth();
 export const firestore = firebase.firestore();
