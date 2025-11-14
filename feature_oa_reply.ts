@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { generateContentWithRetry, getAi, getAiError } from './shared_api.ts';
 import { showToast } from './shared_ui.ts';
 
 
@@ -89,7 +89,8 @@ export const handleStartAnalysis = async () => {
     try {
         const ai = getAi();
         if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
+            const errorMsg = getAiError() || '请刷新页面重试。';
+            throw new Error(`AI服务初始化失败: ${errorMsg}`);
         }
 
         const fileToPart = async (file: File | null) => {
@@ -251,7 +252,8 @@ export const generateAmendmentExplanation = async () => {
     try {
         const ai = getAi();
         if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
+            const errorMsg = getAiError() || '请刷新页面重试。';
+            throw new Error(`AI服务初始化失败: ${errorMsg}`);
         }
 
         const selectedFeaturesJSON = JSON.stringify(oaReplyState.selectedFeatures.map(({ feature, category, source }) => ({ feature, category, source })), null, 2);
@@ -357,7 +359,8 @@ export const generateTechnicalProblemAnalysis = async () => {
     try {
         const ai = getAi();
         if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
+            const errorMsg = getAiError() || '请刷新页面重试。';
+            throw new Error(`AI服务初始化失败: ${errorMsg}`);
         }
 
         const selectedFeaturesText = oaReplyState.selectedFeatures.map(f => `- ${f.feature} (来源: ${f.source}, 效果: ${f.beneficialEffect})`).join('\n');
@@ -470,7 +473,8 @@ export const generateNonObviousnessAnalysis = async () => {
     try {
         const ai = getAi();
         if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
+            const errorMsg = getAiError() || '请刷新页面重试。';
+            throw new Error(`AI服务初始化失败: ${errorMsg}`);
         }
 
         const context = `
@@ -928,7 +932,8 @@ export const generateFinalResponse = async () => {
     try {
         const ai = getAi();
         if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
+            const errorMsg = getAiError() || '请刷新页面重试。';
+            throw new Error(`AI服务初始化失败: ${errorMsg}`);
         }
 
         const assemblyPrompt = `

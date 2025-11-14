@@ -6,7 +6,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import * as pdfjsLib from 'pdfjs-dist';
 import { formalCheckHistoryDb } from './shared_formal_check_db.ts';
 import { showToast } from './shared_ui.ts';
-import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { generateContentWithRetry, getAi, getAiError } from './shared_api.ts';
 
 // Set up PDF.js worker to run in the background
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@5.4.394/build/pdf.worker.mjs';
@@ -223,7 +223,8 @@ const countCharactersConsideringFormulas = (text: string): number => {
 export const handleStartFormalCheck = async () => {
     const ai = getAi();
     if (!ai) {
-        showToast('AI服务初始化失败，请刷新页面重试。');
+        const errorMsg = getAiError() || '请刷新页面重试。';
+        showToast(`AI服务初始化失败: ${errorMsg}`);
         return;
     }
     if (!formalCheckState.file) {
