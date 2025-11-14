@@ -12,16 +12,17 @@
 declare const firebase: any;
 
 // TODO: 用您应用的 Firebase 项目配置替换以下内容
-// 参见: https://firebase.google.com/docs/web/setup#available-libraries
-const firebaseConfig = {
-   apiKey: "AIzaSyAr7Cm0_FN9Ulmjg8DUf9b5pqo7-eI8mDE",
-  authDomain: "aifswx.firebaseapp.com",
-  projectId: "aifswx",
-  storageBucket: "aifswx.firebasestorage.app",
-  messagingSenderId: "724723964501",
-  appId: "1:724723964501:web:a4f1cb6ff3f273778d92dc"
-};
 
+
+// src/config/firebase.config.js
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_API_KEY,
+  authDomain: import.meta.env.VITE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_APP_ID
+};
 // Initialize Firebase App.
 // Check if the app is already initialized to prevent errors on hot-reloads.
 if (!firebase.apps.length) {
