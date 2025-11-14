@@ -2,8 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-// FIX: Import `GenerateContentResponse` to use for type casting.
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { showToast } from './shared_ui.ts';
 
 // --- GEMINI API PRICING ---
@@ -21,30 +20,16 @@ const calculateCost = (inputChars: number, outputChars: number): number => {
 
 
 // --- GEMINI API ---
-let ai: GoogleGenAI | undefined;
-let aiInitializationError: string | null = null;
-
+let ai;
 try {
-    // Use `import.meta.env` for client-side variables, prefixed with `VITE_`.
-    // This is consistent with Firebase config and prevents browser errors.
-    const apiKey = (import.meta as any).env.VITE_API_KEY;
-    if (!apiKey) {
-        throw new Error("VITE_API_KEY 未在环境变量中定义。请检查您的 .env.local 文件和 Vercel 设置。");
-    }
-    ai = new GoogleGenAI({ apiKey });
+    ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 } catch (error) {
     console.error("Failed to initialize GoogleGenAI:", error);
-    aiInitializationError = (error as Error).message;
 }
 
 export const getAi = () => ai;
-export const getAiError = () => aiInitializationError;
 
 export const generateContentWithRetry = async (params, retries = 5, initialDelay = 5000, requestTimeout = 150000): Promise<{ response: any, cost: number }> => {
-    if (!ai) {
-        throw new Error(`AI 服务未初始化: ${getAiError() || '未知错误'}`);
-    }
-    
     let lastError: Error = new Error('AI 服务未知错误。');
 
     const getInputChars = (contents: any): number => {
@@ -64,8 +49,7 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
                 setTimeout(() => reject(new Error(`请求超时（超过 ${requestTimeout / 1000} 秒）。`)), requestTimeout)
             );
 
-            // FIX: Cast the result of Promise.race to GenerateContentResponse to resolve the type error.
-            const response = await Promise.race([apiCallPromise, timeoutPromise]) as GenerateContentResponse;
+            const response = await Promise.race([apiCallPromise, timeoutPromise]);
             
             const outputChars = response.text?.length || 0;
             const cost = calculateCost(inputChars, outputChars);

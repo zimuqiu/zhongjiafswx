@@ -4,7 +4,7 @@
 */
 import { GoogleGenAI, Type } from "@google/genai";
 import { showToast } from './shared_ui.ts';
-import { generateContentWithRetry, getAi, getAiError } from './shared_api.ts';
+import { generateContentWithRetry, getAi } from './shared_api.ts';
 
 // --- HELPER FUNCTIONS ---
 const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -55,8 +55,7 @@ export const resetState = () => {
 export const handleStartSubstantiveCheck = async () => {
     const ai = getAi();
     if (!ai) {
-        const errorMsg = getAiError() || '请刷新页面重试。';
-        showToast(`AI服务初始化失败: ${errorMsg}`);
+        showToast('AI服务初始化失败，请刷新页面重试。');
         return;
     }
     if (!state.files.application || state.files.references.length === 0) {
