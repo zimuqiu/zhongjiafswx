@@ -29,6 +29,9 @@ export const showToast = (message, duration = 3000) => {
     }, duration);
 };
 
+// FIX: Removed promptForApiKey function as per coding guidelines. API key must come from process.env.API_KEY.
+
+
 export const renderSettingsDropdown = () => {
     const currentUser = getCurrentUserProfile();
     const isAuthenticated = !!currentUser;

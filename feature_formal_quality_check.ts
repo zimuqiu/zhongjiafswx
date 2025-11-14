@@ -221,11 +221,6 @@ const countCharactersConsideringFormulas = (text: string): number => {
 
 // --- EVENT HANDLERS & MAIN FUNCTION ---
 export const handleStartFormalCheck = async () => {
-    const ai = getAi();
-    if (!ai) {
-        showToast('AI服务初始化失败，请刷新页面重试。');
-        return;
-    }
     if (!formalCheckState.file) {
         showToast('请先上传一个文件。');
         return;
@@ -244,6 +239,8 @@ export const handleStartFormalCheck = async () => {
     };
 
     try {
+        await getAi(); // Ensure AI is initialized and key is provided before proceeding.
+
         onProgress('正在分析PDF并提取章节...');
         const { sections: extractedSections } = await extractSectionsFromPdf(formalCheckState.file, onProgress);
 
@@ -408,6 +405,10 @@ ${commonOverallRules}
     } catch (error) {
         const err = error as Error;
         formalCheckState.error = err.message;
-        showToast(`质检失败: ${formalCheckState.error}`, 5000);
+        // A specific toast for API key validation failure is already shown in getAi.
+        // Avoid showing a generic failure toast in that case.
+        if (err.message !== 'API Key validation failed.') {
+            showToast(`质检失败: ${formalCheckState.error}`, 5000);
+        }
     }
 };

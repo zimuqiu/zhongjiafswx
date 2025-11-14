@@ -2,7 +2,9 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import { GoogleGenAI } from "@google/genai";
+// FIX: Import GenerateContentResponse to correctly type the API response.
+import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+// FIX: Removed unused import for promptForApiKey.
 import { showToast } from './shared_ui.ts';
 
 // --- GEMINI API PRICING ---
@@ -20,14 +22,33 @@ const calculateCost = (inputChars: number, outputChars: number): number => {
 
 
 // --- GEMINI API ---
-let ai;
-try {
-    ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-} catch (error) {
-    console.error("Failed to initialize GoogleGenAI:", error);
-}
+let ai: GoogleGenAI | null = null;
 
-export const getAi = () => ai;
+export const getAi = async (): Promise<GoogleGenAI> => {
+    if (ai) {
+        return ai;
+    }
+
+    try {
+        // FIX: Per coding guidelines, API key must be obtained from process.env.API_KEY.
+        const newAiInstance = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        // Test with a simple request to validate the key early
+        await newAiInstance.models.generateContent({model: 'gemini-2.5-flash', contents: 'Hi'});
+        ai = newAiInstance;
+        return ai;
+    } catch (error) {
+        ai = null;
+        console.error("Failed to initialize GoogleGenAI or invalid API key:", error);
+        const errorMessage = (error as Error).message;
+        if (errorMessage.includes('API key not valid')) {
+             // FIX: Updated error message to reflect that the key comes from the environment.
+             showToast('提供的API密钥无效。');
+        } else {
+             showToast('AI服务初始化失败，请检查网络或配置。');
+        }
+        throw new Error('API Key validation failed.');
+    }
+};
 
 export const generateContentWithRetry = async (params, retries = 5, initialDelay = 5000, requestTimeout = 150000): Promise<{ response: any, cost: number }> => {
     let lastError: Error = new Error('AI 服务未知错误。');
@@ -40,16 +61,20 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
         if (typeof contents === 'object' && contents.text) return contents.text?.length || 0;
         return 0;
     };
+    
+    // Ensure we have a valid AI client before starting retries.
+    const aiClient = await getAi();
 
     for (let i = 0; i < retries; i++) {
         try {
             const inputChars = getInputChars(params.contents);
-            const apiCallPromise = ai.models.generateContent(params);
+            const apiCallPromise = aiClient.models.generateContent(params);
             const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error(`请求超时（超过 ${requestTimeout / 1000} 秒）。`)), requestTimeout)
             );
 
-            const response = await Promise.race([apiCallPromise, timeoutPromise]);
+            // FIX: Cast the response from Promise.race to GenerateContentResponse to resolve the type error.
+            const response = await Promise.race([apiCallPromise, timeoutPromise]) as GenerateContentResponse;
             
             const outputChars = response.text?.length || 0;
             const cost = calculateCost(inputChars, outputChars);
@@ -58,6 +83,15 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
         } catch (error) {
             lastError = error as Error;
             console.error(`Attempt ${i + 1} of ${retries} failed:`, error);
+            const errorMessage = lastError.message.toLowerCase();
+
+            // If the error is an invalid API key, clear it and fail immediately.
+            if (errorMessage.includes('api key not valid')) {
+                // FIX: Removed sessionStorage logic as API key comes from the environment.
+                ai = null; // Force re-initialization on next call.
+                // FIX: Updated error message to reflect that the key comes from the environment.
+                throw new Error('API密钥无效。请检查您的环境配置。');
+            }
             
             if (i < retries - 1) {
                 const jitter = Math.random() * 1000;

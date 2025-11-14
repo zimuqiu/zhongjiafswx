@@ -87,10 +87,7 @@ const getMimeType = (fileName) => {
 
 export const handleStartAnalysis = async () => {
     try {
-        const ai = getAi();
-        if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
-        }
+        await getAi(); // Ensure AI is initialized and key is provided before proceeding.
 
         const fileToPart = async (file: File | null) => {
             if (!file) return null;
@@ -249,10 +246,7 @@ justification: (string)
 
 export const generateAmendmentExplanation = async () => {
     try {
-        const ai = getAi();
-        if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
-        }
+        await getAi(); // Ensure AI is initialized
 
         const selectedFeaturesJSON = JSON.stringify(oaReplyState.selectedFeatures.map(({ feature, category, source }) => ({ feature, category, source })), null, 2);
 
@@ -355,10 +349,7 @@ export const generateAmendmentExplanation = async () => {
 
 export const generateTechnicalProblemAnalysis = async () => {
     try {
-        const ai = getAi();
-        if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
-        }
+        await getAi(); // Ensure AI is initialized
 
         const selectedFeaturesText = oaReplyState.selectedFeatures.map(f => `- ${f.feature} (来源: ${f.source}, 效果: ${f.beneficialEffect})`).join('\n');
 
@@ -468,10 +459,7 @@ ${selectedFeaturesText}
 
 export const generateNonObviousnessAnalysis = async () => {
     try {
-        const ai = getAi();
-        if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
-        }
+        await getAi(); // Ensure AI is initialized
 
         const context = `
 # **分析上下文**
@@ -926,10 +914,7 @@ a1、“权利要求不符合《专利法》第22条第3款规定的创造性”
 
 export const generateFinalResponse = async () => {
     try {
-        const ai = getAi();
-        if (!ai) {
-            throw new Error('AI服务初始化失败，请刷新页面重试。');
-        }
+        await getAi(); // Ensure AI is initialized
 
         const assemblyPrompt = `
 # **任务**: 将以下上下文组装成一份完整的OA答复文件。

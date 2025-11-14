@@ -53,17 +53,14 @@ export const resetState = () => {
 
 // --- LOGIC FUNCTIONS ---
 export const handleStartSubstantiveCheck = async () => {
-    const ai = getAi();
-    if (!ai) {
-        showToast('AI服务初始化失败，请刷新页面重试。');
-        return;
-    }
     if (!state.files.application || state.files.references.length === 0) {
         showToast('请至少上传一份申请文件和一份对比文件。');
         return;
     }
     
     try {
+        await getAi(); // Ensure AI is initialized and key is provided before proceeding.
+
         const fileToPart = async (file: File) => {
             const base64Data = await fileToBase64(file);
             return {
@@ -186,6 +183,8 @@ export const handleStartSubstantiveCheck = async () => {
     } catch (error) {
         const err = error as Error;
         state.error = err.message;
-        showToast(`质检失败: ${state.error}`, 5000);
+        if (err.message !== 'API Key validation failed.') {
+             showToast(`质检失败: ${state.error}`, 5000);
+        }
     }
 };
