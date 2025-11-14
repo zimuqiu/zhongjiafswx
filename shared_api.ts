@@ -23,8 +23,8 @@ const calculateCost = (inputChars: number, outputChars: number): number => {
 let ai;
 try {
     // Use `import.meta.env` for client-side variables, prefixed with `VITE_`.
-    // FIX: Per coding guidelines, the API key must come from process.env.API_KEY. This also resolves the TypeScript error.
-    ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    // This is consistent with Firebase config and prevents browser errors.
+    ai = new GoogleGenAI({ apiKey: (import.meta as any).env.VITE_API_KEY });
 } catch (error) {
     console.error("Failed to initialize GoogleGenAI:", error);
 }
