@@ -27,8 +27,5 @@
     "noEmit": true
   },
   
-  "include": [
-    "./*.ts",        // 包含根目录下所有 .ts 文件（如 shared_firebase.ts, view_auth.ts 等）
-    "./*.d.ts"       // 包含根目录下的类型声明文件（如 env.d.ts）
-  ]
+ 
 }
