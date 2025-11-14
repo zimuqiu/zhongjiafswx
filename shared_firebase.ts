@@ -18,12 +18,12 @@ import "firebase/compat/firestore";
 // FIX: Cast `import.meta` to `any` to resolve TypeScript errors. This is a workaround
 // for a missing Vite client type definition in the project's TS config.
 const firebaseConfig = {
-  apiKey: (import.meta as any).env.VITE_FIREBASE_API_KEY,
-  authDomain: (import.meta as any).env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: (import.meta as any).env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: (import.meta as any).env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: (import.meta as any).env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: (import.meta as any).env.VITE_FIREBASE_APP_ID
+apiKey: "AIzaSyAr7Cm0_FN9Ulmjg8DUf9b5pqo7-eI8mDE",
+  authDomain: "aifswx.firebaseapp.com",
+  projectId: "aifswx",
+  storageBucket: "aifswx.firebasestorage.app",
+  messagingSenderId: "724723964501",
+  appId: "1:724723964501:web:a4f1cb6ff3f273778d92dc"
 };
 
 // Initialize Firebase App

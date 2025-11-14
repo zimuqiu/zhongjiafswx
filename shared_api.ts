@@ -22,7 +22,7 @@ const calculateCost = (inputChars: number, outputChars: number): number => {
 // --- GEMINI API ---
 let ai;
 try {
-    ai = new GoogleGenAI({ apiKey: (import.meta as any).env.VITE_GEMINI_API_KEY });
+    ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 } catch (error) {
     console.error("Failed to initialize GoogleGenAI:", error);
 }
