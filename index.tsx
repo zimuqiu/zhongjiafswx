@@ -13,7 +13,6 @@ import { renderDashboard } from './view_dashboard.ts';
 import { renderUserManagementView, handleUserPermissionsFormSubmit, handleUserSearch, attachUserManagementListener } from './view_user_management.ts';
 import { renderOaReplyPage } from './view_oa_reply.ts';
 import { renderFormalQualityCheckPage } from './view_formal_quality_check.ts';
-import { resetFormalCheckState } from './feature_formal_quality_check.ts';
 import { renderSubstantiveQualityCheckPage } from './view_substantive_quality_check.ts';
 import { renderPriorityReviewMaterialsPage } from './view_priority_review_materials.ts';
 // Username settings view is no longer used.
@@ -21,6 +20,7 @@ import { renderPriorityReviewMaterialsPage } from './view_priority_review_materi
 // --- APP STATE & ROUTER ---
 const appContainer = document.getElementById('app')!;
 let unsubscribeUserListener: (() => void) | null = null;
+let unsubscribeViewListener: (() => void) | null = null;
 let isProcessingAuthAction = false; // Flag to prevent navigation race conditions
 
 const navigateTo = async (view) => {
@@ -28,6 +28,10 @@ const navigateTo = async (view) => {
     if (unsubscribeUserListener) {
         unsubscribeUserListener();
         unsubscribeUserListener = null;
+    }
+    if (unsubscribeViewListener) {
+        unsubscribeViewListener();
+        unsubscribeViewListener = null;
     }
 
     appContainer.innerHTML = ''; // Clear previous view
@@ -59,17 +63,20 @@ const navigateTo = async (view) => {
         case 'oa-reply':
             if (!currentUser) { navigateTo('login'); return; }
             if (!hasPermission(view)) { showToast('权限不足，无法访问该页面。'); navigateTo('dashboard'); return; }
-            renderOaReplyPage(appContainer);
+// FIX: The `renderOaReplyPage` function should return an unsubscribe function.
+            unsubscribeViewListener = renderOaReplyPage(appContainer);
             break;
         case 'formal-quality-check':
              if (!currentUser) { navigateTo('login'); return; }
              if (!hasPermission(view)) { showToast('权限不足，无法访问该页面。'); navigateTo('dashboard'); return; }
-            renderFormalQualityCheckPage(appContainer);
+// FIX: The `renderFormalQualityCheckPage` function should return an unsubscribe function.
+            unsubscribeViewListener = renderFormalQualityCheckPage(appContainer);
             break;
         case 'substantive-quality-check':
             if (!currentUser) { navigateTo('login'); return; }
             if (!hasPermission(view)) { showToast('权限不足，无法访问该页面。'); navigateTo('dashboard'); return; }
-            renderSubstantiveQualityCheckPage(appContainer);
+// FIX: The `renderSubstantiveQualityCheckPage` function should return an unsubscribe function.
+            unsubscribeViewListener = renderSubstantiveQualityCheckPage(appContainer);
             break;
         case 'priority-review-materials':
              if (!currentUser) { navigateTo('login'); return; }

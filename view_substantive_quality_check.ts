@@ -4,16 +4,41 @@
 */
 import { renderSettingsDropdown, showToast, createFileUploadInput } from './shared_ui.ts';
 import {
-    state,
+    // FIX: Renamed import from 'state' to 'substantiveCheckStore' to match the exported member.
+    substantiveCheckStore,
     resetState,
     handleStartSubstantiveCheck,
 } from './feature_substantive_quality_check.ts';
-import { substantiveCheckHistoryDb } from './shared_formal_check_db.ts';
+import { substantiveCheckHistoryDb, SubstantiveCheckResult } from './shared_formal_check_db.ts';
+
+
+// --- TYPE GUARD ---
+/**
+ * A type guard to safely check if the provided data is a valid SubstantiveCheckResult.
+ * This ensures that data from localStorage or API calls conforms to the expected structure
+ * before being used in rendering, preventing runtime errors.
+ * @param data The data to check, of unknown type.
+ * @returns {boolean} True if the data is a valid SubstantiveCheckResult, false otherwise.
+ */
+function isCheckResultValid(data: unknown): data is SubstantiveCheckResult {
+    // Check if it's a non-null object
+    if (typeof data !== 'object' || data === null) {
+        return false;
+    }
+    // Check if it has an 'issues' property that is an array
+    // We cast to `any` here within the check to access the property,
+    // which is safe inside this type guard.
+    if (!('issues' in data) || !Array.isArray((data as any).issues)) {
+        return false;
+    }
+    return true;
+}
 
 
 // --- RENDER FUNCTIONS ---
 const renderSidebar = () => {
-    const isHistoryView = state.viewMode === 'historyList' || state.viewMode === 'historyDetail';
+    // FIX: Access state via substantiveCheckStore.getState()
+    const isHistoryView = substantiveCheckStore.getState().viewMode === 'historyList' || substantiveCheckStore.getState().viewMode === 'historyDetail';
     const historyBtnText = isHistoryView ? '返回质检' : '历史记录';
     const historyBtnIcon = isHistoryView ? 'arrow_back' : 'history';
 
@@ -43,14 +68,20 @@ const renderSidebar = () => {
     </aside>
 `};
 
-const renderResults = (checkResult: { issues: any[] } | null, totalCost: number) => {
-    // FIX: Add a more robust type guard to ensure `checkResult.issues` is a valid array,
-    // especially when dealing with potentially malformed data from localStorage.
-    const issues = (checkResult as any)?.issues;
-    if (!Array.isArray(issues)) {
-        return '';
+const renderResults = (checkResult: unknown, totalCost: number) => {
+    // Use the robust type guard to validate the data structure.
+    if (!isCheckResultValid(checkResult)) {
+        return `
+            <div class="bg-white dark:bg-gray-800 p-10 rounded-lg text-center">
+                <span class="material-symbols-outlined text-5xl text-yellow-500 mb-4">warning</span>
+                <h4 class="text-2xl font-bold">数据格式错误</h4>
+                <p class="text-gray-500 dark:text-gray-400 mt-2">无法显示此历史记录的结果，数据可能已损坏。</p>
+            </div>
+        `;
     }
     
+    // After the guard, TypeScript knows checkResult is a valid SubstantiveCheckResult.
+    const issues = checkResult.issues;
     const totalIssues = issues.length;
 
     const getCategoryIconAndColor = (category: string) => {
@@ -135,12 +166,10 @@ const renderResults = (checkResult: { issues: any[] } | null, totalCost: number)
 };
 
 const renderHistoryList = () => {
-    const history = substantiveCheckHistoryDb.getHistory();
+    const history = substantiveCheckHistoryDb.getHistory(); // Guaranteed to be an array
     const title = '质检历史记录';
 
-    // FIX: Add a robust type guard to check if history is an array before accessing array properties.
-    // This resolves compile errors when `history` is treated as 'unknown' due to being sourced from localStorage.
-    if (!Array.isArray(history) || history.length === 0) {
+    if (history.length === 0) {
         return `
             <div class="flex flex-col items-center justify-center h-full text-center text-gray-500 dark:text-gray-400">
                 <span class="material-symbols-outlined text-6xl mb-4">history_toggle_off</span>
@@ -171,20 +200,14 @@ const renderHistoryList = () => {
 };
 
 const renderHistoryDetail = () => {
-    const history = substantiveCheckHistoryDb.getHistory();
+    const history = substantiveCheckHistoryDb.getHistory(); // Guaranteed to be an array
+    // FIX: Access state via substantiveCheckStore.getState()
+    const state = substantiveCheckStore.getState();
     
-    // FIX: Add a robust type guard to ensure `history` is an array before calling `.find()`.
-    // This prevents runtime errors and compile errors if the data from localStorage is corrupted.
-    if (!Array.isArray(history)) {
-        state.viewMode = 'historyList';
-        state.selectedHistoryId = null;
-        return renderHistoryList();
-    }
-
     const entry = history.find(item => item.id === state.selectedHistoryId);
     if (!entry) {
-        state.viewMode = 'historyList';
-        state.selectedHistoryId = null;
+        // FIX: Update state via substantiveCheckStore.setState()
+        substantiveCheckStore.setState({ viewMode: 'historyList', selectedHistoryId: null });
         return renderHistoryList();
     }
     
@@ -206,6 +229,8 @@ const renderHistoryDetail = () => {
 
 
 const renderContent = () => {
+    // FIX: Access state via substantiveCheckStore.getState()
+    const state = substantiveCheckStore.getState();
     switch (state.viewMode) {
         case 'historyList':
             return renderHistoryList();
@@ -252,6 +277,8 @@ const renderContent = () => {
 
 
 const updateDOM = () => {
+    // FIX: Access state via substantiveCheckStore.getState()
+    const state = substantiveCheckStore.getState();
     const ids = ['substantive-check-application'];
     ids.forEach(id => {
         const fileListContainer = document.getElementById(`${id}-file-list`);
@@ -291,7 +318,8 @@ const attachFileInputListeners = () => {
     if (fileInput) {
         const handleFileChange = (files: FileList | null) => {
             if (!files || files.length === 0) return;
-            state.files.application = files[0] || null;
+            // FIX: Update state via substantiveCheckStore.setState()
+            substantiveCheckStore.setState({ files: { application: files[0] || null } });
             updateDOM();
         };
 
@@ -325,26 +353,31 @@ const updateView = () => {
 
 const attachEventListeners = () => {
     const pageElement = document.getElementById('substantive-check-page');
-    if (!pageElement) return;
+    if (!pageElement) return () => {};
 
-    pageElement.addEventListener('click', (e) => {
+    const clickHandler = (e: Event) => {
         const target = e.target as HTMLElement;
         const contentContainer = document.getElementById('substantive-check-content-container');
+        // FIX: Access state via substantiveCheckStore.getState()
+        const state = substantiveCheckStore.getState();
 
         const startBtn = target.closest('#start-substantive-check-btn');
         if (startBtn) {
             setTimeout(async () => {
                 const currentFile = state.files.application;
                 resetState();
-                state.files.application = currentFile;
-                state.isLoading = true;
-                state.loadingStep = '正在准备文件...';
+                // FIX: Update state via substantiveCheckStore.setState()
+                substantiveCheckStore.setState({ 
+                    files: { application: currentFile },
+                    isLoading: true,
+                    loadingStep: '正在准备文件...'
+                });
                 if (contentContainer) contentContainer.innerHTML = renderContent();
                 
                 await handleStartSubstantiveCheck();
 
-                state.isLoading = false;
-                state.loadingStep = null;
+                // FIX: Update state via substantiveCheckStore.setState()
+                substantiveCheckStore.setState({ isLoading: false, loadingStep: null });
                 if (contentContainer) contentContainer.innerHTML = renderContent();
             }, 0);
             return;
@@ -364,7 +397,8 @@ const attachEventListeners = () => {
             if (!inputId || !filename) return;
 
             if (state.files.application?.name === filename) {
-                state.files.application = null;
+                // FIX: Update state via substantiveCheckStore.setState()
+                substantiveCheckStore.setState({ files: { application: null } });
             }
             updateDOM();
             showToast(`文件 "${filename}" 已移除。`);
@@ -373,8 +407,9 @@ const attachEventListeners = () => {
 
         const historyBtn = target.closest('#view-substantive-check-history-btn');
         if (historyBtn) {
-            state.viewMode = (state.viewMode === 'main') ? 'historyList' : 'main';
-            state.selectedHistoryId = null;
+            // FIX: Access and update state via store
+            const newViewMode = (state.viewMode === 'main') ? 'historyList' : 'main';
+            substantiveCheckStore.setState({ viewMode: newViewMode, selectedHistoryId: null });
             updateView();
             return;
         }
@@ -383,8 +418,8 @@ const attachEventListeners = () => {
         if (detailBtn) {
             const id = (detailBtn as HTMLElement).dataset.historyId;
             if (id) {
-                state.selectedHistoryId = parseInt(id, 10);
-                state.viewMode = 'historyDetail';
+                // FIX: Update state via substantiveCheckStore.setState()
+                substantiveCheckStore.setState({ selectedHistoryId: parseInt(id, 10), viewMode: 'historyDetail' });
                 reRenderContent();
             }
             return;
@@ -392,14 +427,21 @@ const attachEventListeners = () => {
 
         const backBtn = target.closest('#back-to-substantive-history-list');
         if (backBtn) {
-            state.selectedHistoryId = null;
-            state.viewMode = 'historyList';
+            // FIX: Update state via substantiveCheckStore.setState()
+            substantiveCheckStore.setState({ selectedHistoryId: null, viewMode: 'historyList' });
             reRenderContent();
             return;
         }
-    });
+    };
+
+    pageElement.addEventListener('click', clickHandler);
     
     attachFileInputListeners();
+
+    // FIX: Return an unsubscribe function to be used by the router to prevent memory leaks.
+    return () => {
+        pageElement.removeEventListener('click', clickHandler);
+    };
 };
 
 
@@ -422,5 +464,6 @@ export const renderSubstantiveQualityCheckPage = (appContainer: HTMLElement) => 
                 </main>
             </div>
         </div>`;
-    attachEventListeners();
+    // FIX: Return the unsubscribe function from attachEventListeners.
+    return attachEventListeners();
 };

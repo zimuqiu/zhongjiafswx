@@ -6,6 +6,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { showToast } from './shared_ui.ts';
 import { generateContentWithRetry, getAi } from './shared_api.ts';
 import { substantiveCheckHistoryDb } from './shared_formal_check_db.ts';
+import { createStore } from './shared_store.ts';
 
 // --- HELPER FUNCTIONS ---
 const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -46,15 +47,21 @@ const getInitialState = () => ({
     viewMode: 'main' as 'main' | 'historyList' | 'historyDetail',
     selectedHistoryId: null as number | null,
 });
-export let state = getInitialState();
 
-export const resetState = () => {
-    state = getInitialState();
-}
+const store = createStore(getInitialState());
+export const substantiveCheckStore = {
+    getState: store.getState,
+    setState: store.setState,
+    subscribe: store.subscribe,
+    resetState: () => store.setState(getInitialState())
+};
+/** @deprecated Use substantiveCheckStore.resetState() instead. */
+export const resetState = substantiveCheckStore.resetState;
 
 
 // --- LOGIC FUNCTIONS ---
 export const handleStartSubstantiveCheck = async () => {
+    const state = substantiveCheckStore.getState();
     if (!state.files.application) {
         showToast('请上传一份待质检的申请文件。');
         return;
@@ -74,9 +81,7 @@ export const handleStartSubstantiveCheck = async () => {
         };
 
         const updateLoadingStep = (message: string) => {
-            state.loadingStep = message;
-            const stepEl = document.getElementById('substantive-check-loading-step');
-            if (stepEl) stepEl.textContent = message;
+            substantiveCheckStore.setState({ loadingStep: message });
         };
 
         updateLoadingStep('正在转换申请文件...');
@@ -151,9 +156,10 @@ export const handleStartSubstantiveCheck = async () => {
             config: { responseMimeType: "application/json", responseSchema: schema },
         });
 
-        state.totalCost = cost;
+        
         try {
-            state.checkResult = JSON.parse(response.text.trim());
+            const checkResult = JSON.parse(response.text.trim());
+            substantiveCheckStore.setState({ totalCost: cost, checkResult });
         } catch (e) {
             console.error("Failed to parse AI response:", response.text);
             throw new Error("模型返回了无效的数据格式。");
@@ -164,15 +170,15 @@ export const handleStartSubstantiveCheck = async () => {
             id: Date.now(),
             date: new Date().toLocaleString('zh-CN', { hour12: false }),
             fileName: state.files.application!.name,
-            checkResult: state.checkResult,
-            totalCost: state.totalCost,
+            checkResult: substantiveCheckStore.getState().checkResult,
+            totalCost: cost,
         });
 
     } catch (error) {
         const err = error as Error;
-        state.error = err.message;
+        substantiveCheckStore.setState({ error: err.message });
         if (err.message !== 'API Key validation failed.') {
-             showToast(`质检失败: ${state.error}`, 5000);
+             showToast(`质检失败: ${err.message}`, 5000);
         }
     }
 };

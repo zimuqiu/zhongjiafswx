@@ -6,7 +6,8 @@ import * as docx from 'docx';
 import saveAs from 'file-saver';
 import { showToast, createFileUploadInput, renderSettingsDropdown } from './shared_ui.ts';
 import {
-    oaReplyState,
+    // FIX: Changed import from 'oaReplyState' to 'oaReplyStore' as per the exported member name.
+    oaReplyStore,
     resetOAReplyState,
     handleStartAnalysis,
     generateAmendmentExplanation,
@@ -30,12 +31,14 @@ const oaNavItems = [
 ];
 
 const renderOANav = () => {
+    // FIX: Access state via oaReplyStore.getState()
+    const currentStep = oaReplyStore.getState().currentStep;
     return `
         <nav class="h-full bg-gray-50 dark:bg-gray-800 w-72 p-4 flex flex-col border-r border-gray-200 dark:border-gray-700 shrink-0">
             <ul class="flex flex-col gap-2">
                 ${oaNavItems.map(item => `
                     <li>
-                        <a href="#" class="flex items-center gap-3 p-3 rounded-md transition-colors ${oaReplyState.currentStep === item.id ? 'bg-blue-600 text-white font-semibold' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}" data-step="${item.id}">
+                        <a href="#" class="flex items-center gap-3 p-3 rounded-md transition-colors ${currentStep === item.id ? 'bg-blue-600 text-white font-semibold' : 'hover:bg-gray-200 dark:hover:bg-gray-700'}" data-step="${item.id}">
                             <span class="material-symbols-outlined">${item.icon}</span>
                             <span>${item.label}</span>
                         </a>
@@ -71,8 +74,10 @@ const renderUploadFilesContent = () => `
 
 const renderDistinguishingFeaturesContent = () => {
     const title = '确定区别特征';
+    // FIX: Access state via oaReplyStore.getState()
+    const state = oaReplyStore.getState();
 
-    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'distinguishing-features') {
+    if (state.isLoading && state.loadingStep === 'distinguishing-features') {
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
@@ -84,19 +89,19 @@ const renderDistinguishingFeaturesContent = () => {
         `;
     }
 
-    if (oaReplyState.analysisResult) { // This now primarily serves to show error messages
+    if (state.analysisResult) { // This now primarily serves to show error messages
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
             <div class="prose dark:prose-invert max-w-none bg-white dark:bg-gray-800 p-6 rounded-lg border border-red-500/50">
                <p class="text-red-500 dark:text-red-400">抱歉，分析过程中出现错误：</p>
-               <p>${oaReplyState.analysisResult}</p>
+               <p>${state.analysisResult}</p>
             </div>
          </div>
         `;
     }
     
-    if (!oaReplyState.distinguishingFeatures || oaReplyState.distinguishingFeatures.length === 0) {
+    if (!state.distinguishingFeatures || state.distinguishingFeatures.length === 0) {
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
@@ -116,8 +121,8 @@ const renderDistinguishingFeaturesContent = () => {
         }
     };
 
-    const claimFeatures = oaReplyState.distinguishingFeatures.filter(f => f.category === 'claim');
-    const specificationFeatures = oaReplyState.distinguishingFeatures.filter(f => f.category === 'specification');
+    const claimFeatures = state.distinguishingFeatures.filter(f => f.category === 'claim');
+    const specificationFeatures = state.distinguishingFeatures.filter(f => f.category === 'specification');
 
     const renderFeatureList = (features, title) => {
         if (features.length === 0) return '';
@@ -126,8 +131,8 @@ const renderDistinguishingFeaturesContent = () => {
                 <h4 class="text-xl font-semibold mb-4 text-gray-700 dark:text-gray-300">${title}</h4>
                 <div class="space-y-4">
                     ${features.map(item => {
-                        const originalIndex = oaReplyState.distinguishingFeatures.indexOf(item);
-                        const isChecked = oaReplyState.selectedFeatures.some(sf => sf.feature === item.feature);
+                        const originalIndex = state.distinguishingFeatures.indexOf(item);
+                        const isChecked = state.selectedFeatures.some(sf => sf.feature === item.feature);
                         return `
                             <div class="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 transition-all duration-200 has-[:checked]:border-blue-500 has-[:checked]:bg-blue-500/5 dark:has-[:checked]:bg-gray-800/50">
                                 <div class="flex items-start gap-4">
@@ -175,8 +180,10 @@ const renderDistinguishingFeaturesContent = () => {
 
 const renderAmendmentExplanationContent = () => {
     const title = '修改说明';
+    // FIX: Access state via oaReplyStore.getState()
+    const state = oaReplyStore.getState();
 
-    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'amendment-explanation') {
+    if (state.isLoading && state.loadingStep === 'amendment-explanation') {
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
@@ -192,7 +199,7 @@ const renderAmendmentExplanationContent = () => {
         <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
             <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">AI已根据您选择的区别特征生成了权利要求修改说明的草稿。请在此基础上进行编辑和完善。</p>
-            <textarea id="amendment-explanation-text" rows="18" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.amendmentExplanationText}</textarea>
+            <textarea id="amendment-explanation-text" rows="18" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${state.amendmentExplanationText}</textarea>
             <div class="mt-8 text-center">
                 <button id="confirm-amendment-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
                     确认并进入下一步
@@ -204,8 +211,10 @@ const renderAmendmentExplanationContent = () => {
 
 const renderTechnicalProblemContent = () => {
     const title = '确定技术问题';
+    // FIX: Access state via oaReplyStore.getState()
+    const state = oaReplyStore.getState();
     
-    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'technical-problem') {
+    if (state.isLoading && state.loadingStep === 'technical-problem') {
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
@@ -224,17 +233,17 @@ const renderTechnicalProblemContent = () => {
                 <div>
                     <label for="features-summary" class="block text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">1. 区别技术特征汇总</label>
                     <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">将选择的技术特征汇总成一段文字，作为答复意见的正式部分。</p>
-                    <textarea id="features-summary" rows="5" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.technicalProblemFeaturesSummary}</textarea>
+                    <textarea id="features-summary" rows="5" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${state.technicalProblemFeaturesSummary}</textarea>
                 </div>
                 <div>
                     <label for="technical-problem-statement" class="block text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">2. 确定技术问题</label>
                     <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">根据区别特征，用简洁的语言概括本发明实际解决的技术问题。</p>
-                    <textarea id="technical-problem-statement" rows="3" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.technicalProblemStatement}</textarea>
+                    <textarea id="technical-problem-statement" rows="3" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${state.technicalProblemStatement}</textarea>
                 </div>
                 <div>
                     <label for="effects-analysis" class="block text-lg font-semibold text-gray-800 dark:text-gray-200 mb-2">3. 有益效果分析</label>
                     <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">详细分析每个区别特征是如何解决上述技术问题，并带来了何种有益效果。</p>
-                    <textarea id="effects-analysis" rows="8" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.technicalProblemEffectsAnalysis}</textarea>
+                    <textarea id="effects-analysis" rows="8" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${state.technicalProblemEffectsAnalysis}</textarea>
                 </div>
             </div>
             <div class="mt-8 text-center">
@@ -248,8 +257,10 @@ const renderTechnicalProblemContent = () => {
 
 const renderNonObviousnessContent = () => {
     const title = '非显而易见性分析';
+    // FIX: Access state via oaReplyStore.getState()
+    const state = oaReplyStore.getState();
 
-    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'non-obviousness') {
+    if (state.isLoading && state.loadingStep === 'non-obviousness') {
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
@@ -265,7 +276,7 @@ const renderNonObviousnessContent = () => {
         <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
             <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">AI已根据“三步法”生成非显而易见性分析草稿。请在此基础上进行编辑和完善，以构建最终的法律论证。</p>
-            <textarea id="non-obviousness-analysis" rows="18" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.nonObviousnessAnalysisText}</textarea>
+            <textarea id="non-obviousness-analysis" rows="18" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${state.nonObviousnessAnalysisText}</textarea>
             <div class="mt-8 text-center">
                 <button id="confirm-non-obviousness-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
                     确认并生成最终答复文件
@@ -277,8 +288,10 @@ const renderNonObviousnessContent = () => {
 
 const renderFinalResponseContent = () => {
     const title = '最终答复文件';
+    // FIX: Access state via oaReplyStore.getState()
+    const state = oaReplyStore.getState();
 
-    if (oaReplyState.isLoading && oaReplyState.loadingStep === 'final-response') {
+    if (state.isLoading && state.loadingStep === 'final-response') {
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
@@ -298,10 +311,10 @@ const renderFinalResponseContent = () => {
                     <span class="material-symbols-outlined text-blue-600 dark:text-blue-400">monetization_on</span>
                     <span class="font-semibold text-gray-800 dark:text-gray-200">本次OA答复AI消费总计:</span>
                 </div>
-                <span class="text-xl font-bold text-blue-600 dark:text-blue-400">¥ ${oaReplyState.totalCost.toFixed(4)}</span>
+                <span class="text-xl font-bold text-blue-600 dark:text-blue-400">¥ ${state.totalCost.toFixed(4)}</span>
             </div>
             <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">AI已生成最终答复文件草稿。请在此基础上进行最终的编辑和完善，然后导出为Word文件。</p>
-            <textarea id="final-response-text" rows="20" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${oaReplyState.finalResponseText}</textarea>
+            <textarea id="final-response-text" rows="20" class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg p-3 text-gray-700 dark:text-gray-300 focus:ring-blue-500 focus:border-blue-500 transition-colors">${state.finalResponseText}</textarea>
             <div class="mt-8 text-center">
                 <button id="export-word-btn" class="bg-green-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 mx-auto">
                     <span class="material-symbols-outlined">download</span>
@@ -382,9 +395,11 @@ const renderHistoryDetailContent = (entry) => {
 }
 
 const renderHistoryContent = () => {
-    if (oaReplyState.selectedHistoryId) {
+    // FIX: Access state via oaReplyStore.getState()
+    const state = oaReplyStore.getState();
+    if (state.selectedHistoryId) {
         const history = oaHistoryDb.getHistory();
-        const entry = history.find(item => item.id === oaReplyState.selectedHistoryId);
+        const entry = history.find(item => item.id === state.selectedHistoryId);
         return entry ? renderHistoryDetailContent(entry) : '<p>未找到该历史记录。</p>';
     } else {
         const history = oaHistoryDb.getHistory();
@@ -393,7 +408,9 @@ const renderHistoryContent = () => {
 }
 
 const renderOAContent = () => {
-    switch (oaReplyState.currentStep) {
+    // FIX: Access state via oaReplyStore.getState()
+    const currentStep = oaReplyStore.getState().currentStep;
+    switch (currentStep) {
         case 'upload-files':
             return renderUploadFilesContent();
         case 'distinguishing-features':
@@ -409,7 +426,7 @@ const renderOAContent = () => {
         case 'history':
             return renderHistoryContent();
         default:
-            return `<div class="w-full max-w-4xl mx-auto"><h3 class="text-2xl font-bold mb-6">${oaNavItems.find(i => i.id === oaReplyState.currentStep)?.label}</h3><p>此功能正在开发中。</p></div>`;
+            return `<div class="w-full max-w-4xl mx-auto"><h3 class="text-2xl font-bold mb-6">${oaNavItems.find(i => i.id === currentStep)?.label}</h3><p>此功能正在开发中。</p></div>`;
     }
 }
 
@@ -420,7 +437,8 @@ const updateOANavClasses = () => {
     const navContainer = document.querySelector('#oa-reply-page nav');
     if (!navContainer) return;
 
-    const currentStep = oaReplyState.currentStep;
+    // FIX: Access state via oaReplyStore.getState()
+    const currentStep = oaReplyStore.getState().currentStep;
     const allLinks = navContainer.querySelectorAll('a[data-step]');
 
     allLinks.forEach(link => {
@@ -442,9 +460,10 @@ const updateFileListsDOM = () => {
         const fileListContainer = document.getElementById(`${id}-file-list`);
         if (!fileListContainer) return;
 
+        // FIX: Access state via oaReplyStore.getState()
         const files = id === 'otherReferences'
-            ? oaReplyState.files.otherReferences
-            : (oaReplyState.files[id] ? [oaReplyState.files[id]] : []);
+            ? oaReplyStore.getState().files.otherReferences
+            : (oaReplyStore.getState().files[id] ? [oaReplyStore.getState().files[id]] : []);
 
         fileListContainer.innerHTML = files.map(f => `
             <div class="bg-gray-200 dark:bg-gray-700 p-1 px-2 rounded-md text-xs flex justify-between items-center transition-all">
@@ -461,7 +480,8 @@ const updateFileListsDOM = () => {
 const updateStartAnalysisButtonState = () => {
     const startBtn = document.getElementById('start-analysis-btn') as HTMLButtonElement;
     if (startBtn) {
-        const { application, officeAction, reference1 } = oaReplyState.files;
+        // FIX: Access state via oaReplyStore.getState()
+        const { application, officeAction, reference1 } = oaReplyStore.getState().files;
         startBtn.disabled = !(application && officeAction && reference1);
     }
 };
@@ -476,8 +496,10 @@ const updateOAReplyView = () => {
 };
 
 const attachOAContentEventListeners = () => {
+    // FIX: Access state via oaReplyStore.getState()
+    const state = oaReplyStore.getState();
     // Step-specific listeners
-    if (oaReplyState.currentStep === 'upload-files') {
+    if (state.currentStep === 'upload-files') {
         const fileInputs = document.querySelectorAll('input[type="file"]');
         fileInputs.forEach(input => {
             input.addEventListener('change', (e) => {
@@ -486,9 +508,11 @@ const attachOAContentEventListeners = () => {
                 const inputId = target.id;
 
                 if (inputId === 'otherReferences') {
-                    oaReplyState.files.otherReferences.push(...files);
+                    // FIX: Update state via oaReplyStore.setState() by creating a new array
+                    oaReplyStore.setState(prevState => ({ files: { ...prevState.files, otherReferences: [...prevState.files.otherReferences, ...files] } }));
                 } else {
-                    oaReplyState.files[inputId] = files[0] || null;
+                    // FIX: Update state via oaReplyStore.setState()
+                    oaReplyStore.setState(prevState => ({ files: { ...prevState.files, [inputId]: files[0] || null } }));
                 }
                 updateFileListsDOM();
                 updateStartAnalysisButtonState();
@@ -514,9 +538,8 @@ const attachOAContentEventListeners = () => {
             startBtn.addEventListener('click', () => {
                 // Use setTimeout to decouple from the click event's lifecycle
                 setTimeout(async () => {
-                    oaReplyState.isLoading = true;
-                    oaReplyState.loadingStep = 'distinguishing-features';
-                    oaReplyState.currentStep = 'distinguishing-features';
+                    // FIX: Update state via oaReplyStore.setState()
+                    oaReplyStore.setState({ isLoading: true, loadingStep: 'distinguishing-features', currentStep: 'distinguishing-features' });
                     updateOAReplyView(); // Render loading view
 
                     try {
@@ -524,8 +547,8 @@ const attachOAContentEventListeners = () => {
                     } catch (error) {
                         showToast(`分析失败: ${(error as Error).message}`, 5000);
                     } finally {
-                        oaReplyState.isLoading = false;
-                        oaReplyState.loadingStep = null;
+                        // FIX: Update state via oaReplyStore.setState()
+                        oaReplyStore.setState({ isLoading: false, loadingStep: null });
                         updateOAReplyView(); // Render results or error view
                     }
                 }, 0);
@@ -536,42 +559,47 @@ const attachOAContentEventListeners = () => {
         updateStartAnalysisButtonState();
     }
     
-    if (oaReplyState.currentStep === 'distinguishing-features') {
+    if (state.currentStep === 'distinguishing-features') {
         const confirmBtn = document.getElementById('confirm-features-btn');
         if (confirmBtn) {
             confirmBtn.addEventListener('click', () => {
                 const selectedCheckboxes = document.querySelectorAll('#features-list input[type="checkbox"]:checked');
                 const newSelectedFeatures = Array.from(selectedCheckboxes).map(cb => {
                     const index = parseInt((cb as HTMLElement).id.split('-')[1], 10);
-                    return oaReplyState.distinguishingFeatures[index];
+                    // FIX: Access state via oaReplyStore.getState()
+                    return oaReplyStore.getState().distinguishingFeatures[index];
                 });
 
                 if (newSelectedFeatures.length === 0) {
                     showToast('请至少选择一个区别技术特征。');
                     return;
                 }
-
-                const oldSelectionJSON = JSON.stringify(oaReplyState.selectedFeatures.map(f => f.feature).sort());
+                
+                // FIX: Access state via oaReplyStore.getState()
+                const oldSelectionJSON = JSON.stringify(oaReplyStore.getState().selectedFeatures.map(f => f.feature).sort());
                 const newSelectionJSON = JSON.stringify(newSelectedFeatures.map(f => f.feature).sort());
                 const selectionChanged = oldSelectionJSON !== newSelectionJSON;
 
-                oaReplyState.selectedFeatures = newSelectedFeatures;
+                const newState: any = { selectedFeatures: newSelectedFeatures };
 
                 if (selectionChanged) {
                     // If selection changed, invalidate all subsequent data
-                    oaReplyState.amendmentExplanationText = '';
-                    oaReplyState.technicalProblemFeaturesSummary = '';
-                    oaReplyState.technicalProblemStatement = '';
-                    oaReplyState.technicalProblemEffectsAnalysis = '';
-                    oaReplyState.nonObviousnessAnalysisText = '';
-                    oaReplyState.finalResponseText = '';
+                    newState.amendmentExplanationText = '';
+                    newState.technicalProblemFeaturesSummary = '';
+                    newState.technicalProblemStatement = '';
+                    newState.technicalProblemEffectsAnalysis = '';
+                    newState.nonObviousnessAnalysisText = '';
+                    newState.finalResponseText = '';
                 }
+                
+                // FIX: Update state via oaReplyStore.setState()
+                oaReplyStore.setState(newState);
 
-                if (!oaReplyState.amendmentExplanationText) {
+                // FIX: Access state via oaReplyStore.getState()
+                if (!oaReplyStore.getState().amendmentExplanationText) {
                     setTimeout(async () => {
-                        oaReplyState.isLoading = true;
-                        oaReplyState.loadingStep = 'amendment-explanation';
-                        oaReplyState.currentStep = 'amendment-explanation';
+                        // FIX: Update state via oaReplyStore.setState()
+                        oaReplyStore.setState({ isLoading: true, loadingStep: 'amendment-explanation', currentStep: 'amendment-explanation' });
                         updateOAReplyView();
                         try {
                             await generateAmendmentExplanation();
@@ -581,61 +609,67 @@ const attachOAContentEventListeners = () => {
                             // The 'finally' block will handle resetting the loading state.
                             console.error("Failed to generate amendment explanation:", error);
                         } finally {
-                            oaReplyState.isLoading = false;
-                            oaReplyState.loadingStep = null;
+                            // FIX: Update state via oaReplyStore.setState()
+                            oaReplyStore.setState({ isLoading: false, loadingStep: null });
                             updateOAReplyView();
                         }
                     }, 0);
                 } else {
-                    oaReplyState.currentStep = 'amendment-explanation';
+                    // FIX: Update state via oaReplyStore.setState()
+                    oaReplyStore.setState({ currentStep: 'amendment-explanation' });
                     updateOAReplyView();
                 }
             });
         }
     }
     
-    if (oaReplyState.currentStep === 'amendment-explanation') {
+    if (state.currentStep === 'amendment-explanation') {
         const confirmBtn = document.getElementById('confirm-amendment-btn');
         if (confirmBtn) {
             confirmBtn.addEventListener('click', () => {
                 const newText = (document.getElementById('amendment-explanation-text') as HTMLTextAreaElement).value;
-                const contentChanged = newText !== oaReplyState.amendmentExplanationText;
+                // FIX: Access state via oaReplyStore.getState()
+                const contentChanged = newText !== oaReplyStore.getState().amendmentExplanationText;
                 
-                oaReplyState.amendmentExplanationText = newText;
+                const newState: any = { amendmentExplanationText: newText };
 
                 if (contentChanged) {
-                    oaReplyState.technicalProblemFeaturesSummary = '';
-                    oaReplyState.technicalProblemStatement = '';
-                    oaReplyState.technicalProblemEffectsAnalysis = '';
-                    oaReplyState.nonObviousnessAnalysisText = '';
-                    oaReplyState.finalResponseText = '';
+                    newState.technicalProblemFeaturesSummary = '';
+                    newState.technicalProblemStatement = '';
+                    newState.technicalProblemEffectsAnalysis = '';
+                    newState.nonObviousnessAnalysisText = '';
+                    newState.finalResponseText = '';
                 }
 
-                if (!oaReplyState.technicalProblemFeaturesSummary) {
+                // FIX: Update state via oaReplyStore.setState()
+                oaReplyStore.setState(newState);
+
+                // FIX: Access state via oaReplyStore.getState()
+                if (!oaReplyStore.getState().technicalProblemFeaturesSummary) {
                     setTimeout(async () => {
-                        oaReplyState.isLoading = true;
-                        oaReplyState.loadingStep = 'technical-problem';
-                        oaReplyState.currentStep = 'technical-problem';
+                        // FIX: Update state via oaReplyStore.setState()
+                        oaReplyStore.setState({ isLoading: true, loadingStep: 'technical-problem', currentStep: 'technical-problem' });
                         updateOAReplyView();
                         try {
                             await generateTechnicalProblemAnalysis();
                         } catch (error) {
                             console.error("Failed to generate technical problem analysis:", error);
                         } finally {
-                            oaReplyState.isLoading = false;
-                            oaReplyState.loadingStep = null;
+                            // FIX: Update state via oaReplyStore.setState()
+                            oaReplyStore.setState({ isLoading: false, loadingStep: null });
                             updateOAReplyView();
                         }
                     }, 0);
                 } else {
-                    oaReplyState.currentStep = 'technical-problem';
+                    // FIX: Update state via oaReplyStore.setState()
+                    oaReplyStore.setState({ currentStep: 'technical-problem' });
                     updateOAReplyView();
                 }
             });
         }
     }
 
-    if (oaReplyState.currentStep === 'technical-problem') {
+    if (state.currentStep === 'technical-problem') {
         const confirmBtn = document.getElementById('confirm-problem-btn');
         if (confirmBtn) {
             confirmBtn.addEventListener('click', () => {
@@ -643,81 +677,94 @@ const attachOAContentEventListeners = () => {
                 const newStatement = (document.getElementById('technical-problem-statement') as HTMLTextAreaElement).value;
                 const newAnalysis = (document.getElementById('effects-analysis') as HTMLTextAreaElement).value;
 
-                const contentChanged = newSummary !== oaReplyState.technicalProblemFeaturesSummary ||
-                                        newStatement !== oaReplyState.technicalProblemStatement ||
-                                        newAnalysis !== oaReplyState.technicalProblemEffectsAnalysis;
+                // FIX: Access state via oaReplyStore.getState()
+                const currentState = oaReplyStore.getState();
+                const contentChanged = newSummary !== currentState.technicalProblemFeaturesSummary ||
+                                        newStatement !== currentState.technicalProblemStatement ||
+                                        newAnalysis !== currentState.technicalProblemEffectsAnalysis;
 
-                oaReplyState.technicalProblemFeaturesSummary = newSummary;
-                oaReplyState.technicalProblemStatement = newStatement;
-                oaReplyState.technicalProblemEffectsAnalysis = newAnalysis;
+                const newState: any = {
+                    technicalProblemFeaturesSummary: newSummary,
+                    technicalProblemStatement: newStatement,
+                    technicalProblemEffectsAnalysis: newAnalysis
+                };
 
                 if (contentChanged) {
-                    oaReplyState.nonObviousnessAnalysisText = '';
-                    oaReplyState.finalResponseText = '';
+                    newState.nonObviousnessAnalysisText = '';
+                    newState.finalResponseText = '';
                 }
 
-                if (!oaReplyState.nonObviousnessAnalysisText) {
+                // FIX: Update state via oaReplyStore.setState()
+                oaReplyStore.setState(newState);
+
+                // FIX: Access state via oaReplyStore.getState()
+                if (!oaReplyStore.getState().nonObviousnessAnalysisText) {
                     setTimeout(async () => {
-                        oaReplyState.isLoading = true;
-                        oaReplyState.loadingStep = 'non-obviousness';
-                        oaReplyState.currentStep = 'non-obviousness';
+                        // FIX: Update state via oaReplyStore.setState()
+                        oaReplyStore.setState({ isLoading: true, loadingStep: 'non-obviousness', currentStep: 'non-obviousness' });
                         updateOAReplyView();
                         try {
                             await generateNonObviousnessAnalysis();
                         } catch (error) {
                             console.error("Failed to generate non-obviousness analysis:", error);
                         } finally {
-                            oaReplyState.isLoading = false;
-                            oaReplyState.loadingStep = null;
+                            // FIX: Update state via oaReplyStore.setState()
+                            oaReplyStore.setState({ isLoading: false, loadingStep: null });
                             updateOAReplyView();
                         }
                     }, 0);
                 } else {
-                    oaReplyState.currentStep = 'non-obviousness';
+                    // FIX: Update state via oaReplyStore.setState()
+                    oaReplyStore.setState({ currentStep: 'non-obviousness' });
                     updateOAReplyView();
                 }
             });
         }
     }
     
-    if (oaReplyState.currentStep === 'non-obviousness') {
+    if (state.currentStep === 'non-obviousness') {
         const confirmBtn = document.getElementById('confirm-non-obviousness-btn');
         if (confirmBtn) {
             confirmBtn.addEventListener('click', () => {
                 const newAnalysisText = (document.getElementById('non-obviousness-analysis') as HTMLTextAreaElement).value;
-                const contentChanged = newAnalysisText !== oaReplyState.nonObviousnessAnalysisText;
+                // FIX: Access state via oaReplyStore.getState()
+                const contentChanged = newAnalysisText !== oaReplyStore.getState().nonObviousnessAnalysisText;
                 
-                oaReplyState.nonObviousnessAnalysisText = newAnalysisText;
+                const newState: any = { nonObviousnessAnalysisText: newAnalysisText };
 
                 if (contentChanged) {
-                    oaReplyState.finalResponseText = '';
+                    newState.finalResponseText = '';
                 }
                 
-                if (!oaReplyState.finalResponseText) {
+                // FIX: Update state via oaReplyStore.setState()
+                oaReplyStore.setState(newState);
+                
+                // FIX: Access state via oaReplyStore.getState()
+                if (!oaReplyStore.getState().finalResponseText) {
                      setTimeout(async () => {
-                        oaReplyState.isLoading = true;
-                        oaReplyState.loadingStep = 'final-response';
-                        oaReplyState.currentStep = 'final-response';
+                        // FIX: Update state via oaReplyStore.setState()
+                        oaReplyStore.setState({ isLoading: true, loadingStep: 'final-response', currentStep: 'final-response' });
                         updateOAReplyView();
                         try {
                             await generateFinalResponse();
                         } catch (error) {
                              console.error("Failed to generate final response:", error);
                         } finally {
-                            oaReplyState.isLoading = false;
-                            oaReplyState.loadingStep = null;
+                            // FIX: Update state via oaReplyStore.setState()
+                            oaReplyStore.setState({ isLoading: false, loadingStep: null });
                             updateOAReplyView();
                         }
                     }, 0);
                 } else {
-                    oaReplyState.currentStep = 'final-response';
+                    // FIX: Update state via oaReplyStore.setState()
+                    oaReplyStore.setState({ currentStep: 'final-response' });
                     updateOAReplyView();
                 }
             });
         }
     }
 
-    if (oaReplyState.currentStep === 'final-response') {
+    if (state.currentStep === 'final-response') {
         const exportBtn = document.getElementById('export-word-btn');
         if (exportBtn) {
             exportBtn.addEventListener('click', () => {
@@ -762,14 +809,15 @@ const attachOAContentEventListeners = () => {
         }
     }
 
-    if (oaReplyState.currentStep === 'history') {
+    if (state.currentStep === 'history') {
         const detailButtons = document.querySelectorAll('.view-history-detail-btn');
         detailButtons.forEach(btn => {
             btn.addEventListener('click', (e) => {
                 const currentTarget = e.currentTarget as HTMLElement;
                 const id = currentTarget.dataset.historyId;
                 if (id) {
-                    oaReplyState.selectedHistoryId = parseInt(id, 10);
+                    // FIX: Update state via oaReplyStore.setState()
+                    oaReplyStore.setState({ selectedHistoryId: parseInt(id, 10) });
                     updateOAReplyView();
                 }
             });
@@ -778,7 +826,8 @@ const attachOAContentEventListeners = () => {
         const backBtn = document.getElementById('back-to-history-list');
         if (backBtn) {
             backBtn.addEventListener('click', () => {
-                oaReplyState.selectedHistoryId = null;
+                // FIX: Update state via oaReplyStore.setState()
+                oaReplyStore.setState({ selectedHistoryId: null });
                 updateOAReplyView();
             });
         }
@@ -807,61 +856,68 @@ export const renderOaReplyPage = (appContainer: HTMLElement) => {
     `;
     
     const pageElement = document.getElementById('oa-reply-page');
-    if (pageElement) {
-        pageElement.addEventListener('click', (e) => {
-            const target = e.target as HTMLElement;
+    if (!pageElement) return () => {};
 
-            const navLink = target.closest('nav a[data-step]');
-            if (navLink) {
-                e.preventDefault();
-                const step = (navLink as HTMLElement).dataset.step;
-                if (step && step !== oaReplyState.currentStep) {
-                    if (step === 'history') {
-                        oaReplyState.selectedHistoryId = null; 
-                    }
-                    oaReplyState.currentStep = step;
-                    updateOAReplyView();
+    const clickHandler = (e: Event) => {
+        const target = e.target as HTMLElement;
+
+        const navLink = target.closest('nav a[data-step]');
+        if (navLink) {
+            e.preventDefault();
+            const step = (navLink as HTMLElement).dataset.step;
+            // FIX: Access state via oaReplyStore.getState()
+            if (step && step !== oaReplyStore.getState().currentStep) {
+                // FIX: Update state via oaReplyStore.setState()
+                if (step === 'history') {
+                    oaReplyStore.setState({ selectedHistoryId: null }); 
                 }
-                return;
-            }
-
-            const restartBtn = target.closest('#restart-oa');
-            if (restartBtn) {
-                resetOAReplyState();
+                oaReplyStore.setState({ currentStep: step });
                 updateOAReplyView();
-                return;
             }
+            return;
+        }
 
-            const removeBtn = target.closest('.remove-file-btn');
-            if (removeBtn) {
-                const inputId = removeBtn.getAttribute('data-input-id');
-                const filename = removeBtn.getAttribute('data-filename');
-                if (!inputId || !filename) return;
+        const restartBtn = target.closest('#restart-oa');
+        if (restartBtn) {
+            resetOAReplyState();
+            updateOAReplyView();
+            return;
+        }
 
-                const { files: currentFileState } = oaReplyState;
-                let updatedFiles;
-                let fileRemoved = false;
-                
-                if (inputId === 'otherReferences') {
-                    const newOtherRefs = currentFileState.otherReferences.filter(f => f.name !== filename);
-                    if (newOtherRefs.length < currentFileState.otherReferences.length) {
-                        updatedFiles = { ...currentFileState, otherReferences: newOtherRefs };
-                        fileRemoved = true;
-                    }
-                } else if (currentFileState[inputId] && (currentFileState[inputId] as File).name === filename) {
-                    updatedFiles = { ...currentFileState, [inputId]: null };
+        const removeBtn = target.closest('.remove-file-btn');
+        if (removeBtn) {
+            const inputId = removeBtn.getAttribute('data-input-id');
+            const filename = removeBtn.getAttribute('data-filename');
+            if (!inputId || !filename) return;
+
+            // FIX: Access state via oaReplyStore.getState()
+            const { files: currentFileState } = oaReplyStore.getState();
+            let updatedFiles;
+            let fileRemoved = false;
+            
+            if (inputId === 'otherReferences') {
+                const newOtherRefs = currentFileState.otherReferences.filter(f => f.name !== filename);
+                if (newOtherRefs.length < currentFileState.otherReferences.length) {
+                    updatedFiles = { ...currentFileState, otherReferences: newOtherRefs };
                     fileRemoved = true;
                 }
-                
-                if (fileRemoved && updatedFiles) {
-                    oaReplyState.files = { ...updatedFiles };
-                    updateFileListsDOM();
-                    updateStartAnalysisButtonState();
-                    showToast(`文件 "${filename}" 已移除。`);
-                }
+            } else if (currentFileState[inputId] && (currentFileState[inputId] as File).name === filename) {
+                updatedFiles = { ...currentFileState, [inputId]: null };
+                fileRemoved = true;
             }
-        });
-    }
-
+            
+            if (fileRemoved && updatedFiles) {
+                // FIX: Update state via oaReplyStore.setState()
+                oaReplyStore.setState({ files: { ...updatedFiles } });
+                updateFileListsDOM();
+                updateStartAnalysisButtonState();
+                showToast(`文件 "${filename}" 已移除。`);
+            }
+        }
+    };
+    pageElement.addEventListener('click', clickHandler);
+    
     updateOAReplyView();
+    // FIX: Return an unsubscribe function to be used by the router to prevent memory leaks.
+    return () => pageElement.removeEventListener('click', clickHandler);
 };

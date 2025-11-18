@@ -5,14 +5,14 @@
 import { formalCheckHistoryDb } from './shared_formal_check_db.ts';
 import { showToast, createFileUploadInput, renderSettingsDropdown } from './shared_ui.ts';
 import { 
-    formalCheckState, 
-    resetFormalCheckState, 
+    formalCheckStore,
     handleStartFormalCheck 
 } from './feature_formal_quality_check.ts';
 
 // --- RENDER FUNCTIONS ---
 const renderFormalCheckSidebar = () => {
-    const isHistoryView = formalCheckState.viewMode === 'historyList' || formalCheckState.viewMode === 'historyDetail';
+    // FIX: Access state via formalCheckStore.getState()
+    const isHistoryView = formalCheckStore.getState().viewMode === 'historyList' || formalCheckStore.getState().viewMode === 'historyDetail';
     const historyBtnText = isHistoryView ? '返回质检' : '历史记录';
     const historyBtnIcon = isHistoryView ? 'arrow_back' : 'history';
 
@@ -57,7 +57,7 @@ const renderFormalCheckResults = (results: any[]) => {
                     <div class="flex items-center gap-2 text-lg">
                         <span class="material-symbols-outlined text-green-600 dark:text-green-400">payments</span>
                         <span class="font-semibold text-gray-700 dark:text-gray-200">本次质检AI消费:</span>
-                        <span class="font-bold text-green-600 dark:text-green-400">¥ ${formalCheckState.totalCost.toFixed(4)}</span>
+                        <span class="font-bold text-green-600 dark:text-green-400">¥ ${formalCheckStore.getState().totalCost.toFixed(4)}</span>
                     </div>
                 </div>
             </div>
@@ -135,10 +135,11 @@ const renderFormalCheckHistoryList = () => {
 
 const renderFormalCheckHistoryDetail = () => {
     const history = formalCheckHistoryDb.getHistory();
-    const entry = history.find(item => item.id === formalCheckState.selectedHistoryId);
+    // FIX: Access state via formalCheckStore.getState()
+    const entry = history.find(item => item.id === formalCheckStore.getState().selectedHistoryId);
     if (!entry) {
-        formalCheckState.viewMode = 'historyList';
-        formalCheckState.selectedHistoryId = null;
+        // FIX: Update state via formalCheckStore.setState()
+        formalCheckStore.setState({ viewMode: 'historyList', selectedHistoryId: null });
         return renderFormalCheckHistoryList();
     }
     
@@ -159,42 +160,44 @@ const renderFormalCheckHistoryDetail = () => {
 };
 
 const renderFormalCheckContent = () => {
-    switch (formalCheckState.viewMode) {
+    // FIX: Access state via formalCheckStore.getState()
+    const state = formalCheckStore.getState();
+    switch (state.viewMode) {
         case 'historyList':
             return renderFormalCheckHistoryList();
         case 'historyDetail':
             return renderFormalCheckHistoryDetail();
         case 'main':
         default:
-            if (formalCheckState.isLoading) {
+            if (state.isLoading) {
                 return `
                     <div class="flex flex-col items-center justify-center h-full">
                         <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
-                        <p class="mt-4 text-lg font-semibold text-gray-700 dark:text-gray-300" id="formal-check-loading-step">${formalCheckState.loadingStep || '正在准备质检...'}</p>
+                        <p class="mt-4 text-lg font-semibold text-gray-700 dark:text-gray-300" id="formal-check-loading-step">${state.loadingStep || '正在准备质检...'}</p>
                         <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">AI正在分析文件，请稍候。</p>
                     </div>
                 `;
             }
 
-            if (formalCheckState.error) {
+            if (state.error) {
                  const errorContent = `
                     <div class="max-w-2xl mx-auto text-center flex flex-col items-center justify-center">
                         <span class="material-symbols-outlined text-6xl mb-4 text-red-500">report_problem</span>
                         <h3 class="text-2xl font-bold mb-4 text-red-600 dark:text-red-400">质检时出现错误</h3>
                         <div class="bg-red-50 dark:bg-gray-800 border border-red-200 dark:border-red-700 p-4 rounded-lg text-left w-full">
-                            <pre class="text-red-700 dark:text-red-300 whitespace-pre-wrap font-sans text-sm">${formalCheckState.error}</pre>
+                            <pre class="text-red-700 dark:text-red-300 whitespace-pre-wrap font-sans text-sm">${state.error}</pre>
                         </div>
                         <p class="mt-6 text-sm text-gray-500 dark:text-gray-400">请在左侧点击“重新开始”按钮返回重试。</p>
                     </div>
                 `;
-                if (formalCheckState.checkResult && formalCheckState.checkResult.length > 0) {
-                    return `<div>${renderFormalCheckResults(formalCheckState.checkResult)}<hr class="my-8 border-gray-300 dark:border-gray-600">${errorContent}</div>`
+                if (state.checkResult && state.checkResult.length > 0) {
+                    return `<div>${renderFormalCheckResults(state.checkResult)}<hr class="my-8 border-gray-300 dark:border-gray-600">${errorContent}</div>`
                 }
                 return errorContent;
             }
 
-            if (formalCheckState.checkResult && formalCheckState.checkResult.length > 0) {
-                return renderFormalCheckResults(formalCheckState.checkResult);
+            if (state.checkResult && state.checkResult.length > 0) {
+                return renderFormalCheckResults(state.checkResult);
             }
 
             return `
@@ -216,13 +219,15 @@ const reRenderContent = () => {
 
 const updateFormalCheckDOM = () => {
     const fileListContainer = document.getElementById('formal-check-file-file-list');
+    // FIX: Access state via formalCheckStore.getState()
+    const state = formalCheckStore.getState();
     if (fileListContainer) {
-        if (formalCheckState.file) {
+        if (state.file) {
             fileListContainer.innerHTML = `
             <div class="bg-gray-200 dark:bg-gray-700 p-1 px-2 rounded-md text-xs flex justify-between items-center transition-all">
                 <span class="material-symbols-outlined text-base mr-2 text-gray-500 dark:text-gray-400">description</span>
-                <span class="truncate flex-grow" title="${formalCheckState.file.name}">${formalCheckState.file.name}</span>
-                <button class="remove-file-btn ml-2 p-1 rounded-full text-gray-500 dark:text-gray-400 hover:bg-red-500 hover:text-white focus:outline-none focus:ring-2 focus:ring-red-500" data-filename="${formalCheckState.file.name}" aria-label="移除 ${formalCheckState.file.name}">
+                <span class="truncate flex-grow" title="${state.file.name}">${state.file.name}</span>
+                <button class="remove-file-btn ml-2 p-1 rounded-full text-gray-500 dark:text-gray-400 hover:bg-red-500 hover:text-white focus:outline-none focus:ring-2 focus:ring-red-500" data-filename="${state.file.name}" aria-label="移除 ${state.file.name}">
                     <span class="material-symbols-outlined text-sm pointer-events-none">close</span>
                 </button>
             </div>
@@ -233,7 +238,7 @@ const updateFormalCheckDOM = () => {
     }
 
     const startBtn = document.getElementById('start-formal-check-btn') as HTMLButtonElement;
-    if (startBtn) startBtn.disabled = !formalCheckState.file;
+    if (startBtn) startBtn.disabled = !state.file;
 };
 
 const attachFileInputListeners = () => {
@@ -248,7 +253,8 @@ const attachFileInputListeners = () => {
                     target.value = '';
                     return;
                 }
-                formalCheckState.file = file;
+                // FIX: Update state via formalCheckStore.setState()
+                formalCheckStore.setState({ file: file });
                 updateFormalCheckDOM();
             }
         });
@@ -282,17 +288,17 @@ const updateView = () => {
 
 const attachFormalCheckEventListeners = () => {
     const pageElement = document.getElementById('formal-check-page');
-    if (!pageElement) return;
+    if (!pageElement) return () => {};
 
-    pageElement.addEventListener('click', (e) => {
+    const clickHandler = (e: Event) => {
         const target = e.target as HTMLElement;
 
         const detailBtn = target.closest('.view-formal-check-detail-btn');
         if (detailBtn) {
             const id = (detailBtn as HTMLElement).dataset.historyId;
             if (id) {
-                formalCheckState.selectedHistoryId = parseInt(id, 10);
-                formalCheckState.viewMode = 'historyDetail';
+                // FIX: Update state via formalCheckStore.setState()
+                formalCheckStore.setState({ selectedHistoryId: parseInt(id, 10), viewMode: 'historyDetail' });
                 reRenderContent();
             }
             return;
@@ -300,8 +306,8 @@ const attachFormalCheckEventListeners = () => {
 
         const backBtn = target.closest('#back-to-formal-history-list');
         if (backBtn) {
-            formalCheckState.selectedHistoryId = null;
-            formalCheckState.viewMode = 'historyList';
+            // FIX: Update state via formalCheckStore.setState()
+            formalCheckStore.setState({ selectedHistoryId: null, viewMode: 'historyList' });
             reRenderContent();
             return;
         }
@@ -309,8 +315,10 @@ const attachFormalCheckEventListeners = () => {
         const removeBtn = target.closest('.remove-file-btn');
         if (removeBtn) {
             const filename = removeBtn.getAttribute('data-filename');
-            if (formalCheckState.file?.name === filename) {
-                formalCheckState.file = null;
+            // FIX: Access state via formalCheckStore.getState()
+            if (formalCheckStore.getState().file?.name === filename) {
+                // FIX: Update state via formalCheckStore.setState()
+                formalCheckStore.setState({ file: null });
                 updateFormalCheckDOM();
                 showToast(`文件 "${filename}" 已移除。`);
             }
@@ -322,17 +330,24 @@ const attachFormalCheckEventListeners = () => {
             // Use setTimeout to ensure the current click event processing is complete
             // before we manipulate the DOM, preventing the double-click issue.
             setTimeout(async () => {
-                const currentFile = formalCheckState.file;
-                resetFormalCheckState();
-                formalCheckState.file = currentFile;
-                formalCheckState.isLoading = true;
-                formalCheckState.loadingStep = '正在准备质检...';
+                // FIX: Access state via formalCheckStore.getState()
+                const currentFile = formalCheckStore.getState().file;
+                formalCheckStore.resetState();
+                // FIX: Update state via formalCheckStore.setState()
+                formalCheckStore.setState({ 
+                    file: currentFile,
+                    isLoading: true,
+                    loadingStep: '正在准备质检...'
+                });
                 reRenderContent(); // Show spinner
                 
                 await handleStartFormalCheck();
                 
-                formalCheckState.isLoading = false;
-                formalCheckState.loadingStep = null;
+                // FIX: Update state via formalCheckStore.setState()
+                formalCheckStore.setState({
+                    isLoading: false,
+                    loadingStep: null
+                });
                 reRenderContent(); // Show results
             }, 0);
             return;
@@ -340,21 +355,27 @@ const attachFormalCheckEventListeners = () => {
 
         const historyBtn = target.closest('#view-formal-check-history-btn');
         if (historyBtn) {
-            formalCheckState.viewMode = (formalCheckState.viewMode === 'main') ? 'historyList' : 'main';
-            formalCheckState.selectedHistoryId = null;
+            // FIX: Access and update state via store
+            const newViewMode = (formalCheckStore.getState().viewMode === 'main') ? 'historyList' : 'main';
+            formalCheckStore.setState({ viewMode: newViewMode, selectedHistoryId: null });
             updateView();
             return;
         }
 
         const resetBtn = target.closest('#reset-formal-check-btn');
         if (resetBtn) {
-            resetFormalCheckState();
+            formalCheckStore.resetState();
             updateView();
             return;
         }
-    });
+    };
+    pageElement.addEventListener('click', clickHandler);
     
     attachFileInputListeners();
+    // FIX: Return an unsubscribe function to be used by the router to prevent memory leaks.
+    return () => {
+        pageElement.removeEventListener('click', clickHandler);
+    };
 };
 
 export const renderFormalQualityCheckPage = (appContainer: HTMLElement) => {
@@ -376,5 +397,6 @@ export const renderFormalQualityCheckPage = (appContainer: HTMLElement) => {
                 </main>
             </div>
         </div>`;
-    attachFormalCheckEventListeners();
+    // FIX: Return the unsubscribe function from attachFormalCheckEventListeners.
+    return attachFormalCheckEventListeners();
 };

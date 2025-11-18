@@ -4,7 +4,7 @@
 */
 import { generateContentWithRetry, getAi } from './shared_api.ts';
 import { showToast } from './shared_ui.ts';
-
+import { createStore } from './shared_store.ts';
 
 // --- OA HISTORY DATABASE ---
 export const oaHistoryDb = {
@@ -49,10 +49,18 @@ const getInitialOAReplyState = () => ({
     selectedHistoryId: null as number | null,
     totalCost: 0,
 });
-export let oaReplyState = getInitialOAReplyState();
 
+const store = createStore(getInitialOAReplyState());
+export const oaReplyStore = {
+    getState: store.getState,
+    setState: store.setState,
+    subscribe: store.subscribe,
+    resetState: () => store.setState(getInitialOAReplyState())
+};
+
+/** @deprecated Use oaReplyStore.resetState() instead. */
 export function resetOAReplyState() {
-    oaReplyState = getInitialOAReplyState();
+    oaReplyStore.resetState();
 }
 
 
@@ -88,6 +96,7 @@ const getMimeType = (fileName) => {
 export const handleStartAnalysis = async () => {
     try {
         await getAi(); // Ensure AI is initialized and key is provided before proceeding.
+        const state = oaReplyStore.getState();
 
         const fileToPart = async (file: File | null) => {
             if (!file) return null;
@@ -101,10 +110,10 @@ export const handleStartAnalysis = async () => {
         };
         
         const allFiles = [
-            oaReplyState.files.application,
-            oaReplyState.files.officeAction,
-            oaReplyState.files.reference1,
-            ...oaReplyState.files.otherReferences
+            state.files.application,
+            state.files.officeAction,
+            state.files.reference1,
+            ...state.files.otherReferences
         ].filter((f): f is File => f !== null);
 
         if (allFiles.length === 0) {
@@ -224,12 +233,15 @@ justification: (string)
                 responseSchema: responseSchema,
             },
         });
-        oaReplyState.totalCost += cost;
         
         const resultText = response.text.trim();
         try {
-            oaReplyState.distinguishingFeatures = JSON.parse(resultText);
-            oaReplyState.analysisResult = '';
+            const distinguishingFeatures = JSON.parse(resultText);
+            oaReplyStore.setState(prevState => ({
+                totalCost: prevState.totalCost + cost,
+                distinguishingFeatures: distinguishingFeatures,
+                analysisResult: ''
+            }));
         } catch(e) {
             console.error("Failed to parse JSON response:", resultText);
             throw new Error("模型返回了无效的数据格式。请尝试重新分析。");
@@ -238,8 +250,7 @@ justification: (string)
     } catch (error) {
         console.error("Analysis failed:", error);
         const err = error as Error;
-        oaReplyState.analysisResult = `${err.message}`;
-        oaReplyState.distinguishingFeatures = [];
+        oaReplyStore.setState({ analysisResult: err.message, distinguishingFeatures: [] });
         throw error;
     }
 }
@@ -247,8 +258,9 @@ justification: (string)
 export const generateAmendmentExplanation = async () => {
     try {
         await getAi(); // Ensure AI is initialized
+        const state = oaReplyStore.getState();
 
-        const selectedFeaturesJSON = JSON.stringify(oaReplyState.selectedFeatures.map(({ feature, category, source }) => ({ feature, category, source })), null, 2);
+        const selectedFeaturesJSON = JSON.stringify(state.selectedFeatures.map(({ feature, category, source }) => ({ feature, category, source })), null, 2);
 
         const fileToPart = async (file: File | null) => {
             if (!file) return null;
@@ -261,7 +273,7 @@ export const generateAmendmentExplanation = async () => {
             };
         };
         
-        const applicationFilePart = await fileToPart(oaReplyState.files.application);
+        const applicationFilePart = await fileToPart(state.files.application);
         if (!applicationFilePart) {
             throw new Error("缺少发明申请文件，无法生成修改说明。");
         }
@@ -335,9 +347,11 @@ export const generateAmendmentExplanation = async () => {
             model: 'gemini-2.5-pro',
             contents: contents,
         });
-        oaReplyState.totalCost += cost;
-
-        oaReplyState.amendmentExplanationText = response.text.trim();
+        
+        oaReplyStore.setState(prevState => ({
+            totalCost: prevState.totalCost + cost,
+            amendmentExplanationText: response.text.trim()
+        }));
 
     } catch (error) {
         const err = error as Error;
@@ -350,8 +364,9 @@ export const generateAmendmentExplanation = async () => {
 export const generateTechnicalProblemAnalysis = async () => {
     try {
         await getAi(); // Ensure AI is initialized
+        const state = oaReplyStore.getState();
 
-        const selectedFeaturesText = oaReplyState.selectedFeatures.map(f => `- ${f.feature} (来源: ${f.source}, 效果: ${f.beneficialEffect})`).join('\n');
+        const selectedFeaturesText = state.selectedFeatures.map(f => `- ${f.feature} (来源: ${f.source}, 效果: ${f.beneficialEffect})`).join('\n');
 
         const prompt = `
 # **角色**
@@ -436,14 +451,16 @@ ${selectedFeaturesText}
                 responseSchema: responseSchema,
             },
         });
-        oaReplyState.totalCost += cost;
         
         const resultText = response.text.trim();
         try {
             const parsed = JSON.parse(resultText);
-            oaReplyState.technicalProblemFeaturesSummary = parsed.featuresSummary;
-            oaReplyState.technicalProblemStatement = parsed.technicalProblemStatement;
-            oaReplyState.technicalProblemEffectsAnalysis = parsed.effectsAnalysis;
+            oaReplyStore.setState(prevState => ({
+                totalCost: prevState.totalCost + cost,
+                technicalProblemFeaturesSummary: parsed.featuresSummary,
+                technicalProblemStatement: parsed.technicalProblemStatement,
+                technicalProblemEffectsAnalysis: parsed.effectsAnalysis
+            }));
         } catch(e) {
             console.error("Failed to parse JSON for technical problem:", resultText);
             throw new Error("模型返回了无效的数据格式。");
@@ -460,18 +477,19 @@ ${selectedFeaturesText}
 export const generateNonObviousnessAnalysis = async () => {
     try {
         await getAi(); // Ensure AI is initialized
+        const state = oaReplyStore.getState();
 
         const context = `
 # **分析上下文**
 
 ## **1. 区别技术特征汇总:**
-${oaReplyState.technicalProblemFeaturesSummary}
+${state.technicalProblemFeaturesSummary}
 
 ## **2. 技术问题陈述:**
-${oaReplyState.technicalProblemStatement}
+${state.technicalProblemStatement}
 
 ## **3. 有益效果分析:**
-${oaReplyState.technicalProblemEffectsAnalysis}
+${state.technicalProblemEffectsAnalysis}
 `;
         
         const fileToPart = async (file: File | null) => {
@@ -885,12 +903,12 @@ a1、“权利要求不符合《专利法》第22条第3款规定的创造性”
         };
 
         // Add all files with clear labels
-        await addFileToParts(oaReplyState.files.application, '发明申请文件 (Application File)');
-        await addFileToParts(oaReplyState.files.officeAction, '审查意见通知书 (Office Action)');
-        await addFileToParts(oaReplyState.files.reference1, '对比文件1 (Reference File 1)');
+        await addFileToParts(state.files.application, '发明申请文件 (Application File)');
+        await addFileToParts(state.files.officeAction, '审查意见通知书 (Office Action)');
+        await addFileToParts(state.files.reference1, '对比文件1 (Reference File 1)');
         
-        for (let i = 0; i < oaReplyState.files.otherReferences.length; i++) {
-            const file = oaReplyState.files.otherReferences[i];
+        for (let i = 0; i < state.files.otherReferences.length; i++) {
+            const file = state.files.otherReferences[i];
             await addFileToParts(file, `其他对比文件 ${i + 1} (Other Reference File ${i + 1})`);
         }
         
@@ -900,9 +918,11 @@ a1、“权利要求不符合《专利法》第22条第3款规定的创造性”
             model: 'gemini-2.5-pro',
             contents: contents,
         });
-        oaReplyState.totalCost += cost;
-
-        oaReplyState.nonObviousnessAnalysisText = response.text.trim();
+        
+        oaReplyStore.setState(prevState => ({
+            totalCost: prevState.totalCost + cost,
+            nonObviousnessAnalysisText: response.text.trim()
+        }));
     } catch (error) {
         const err = error as Error;
         console.error("Non-obviousness analysis generation failed:", err);
@@ -915,20 +935,21 @@ a1、“权利要求不符合《专利法》第22条第3款规定的创造性”
 export const generateFinalResponse = async () => {
     try {
         await getAi(); // Ensure AI is initialized
+        const state = oaReplyStore.getState();
 
         const assemblyPrompt = `
 # **任务**: 将以下上下文组装成一份完整的OA答复文件。
 
 # **上下文**:
 一、修改说明
-${oaReplyState.amendmentExplanationText}
+${state.amendmentExplanationText}
 二、申请人认为，修改后的权利要求1具备创造性。
 1、区别技术特征的确定以及本发明实际所要解决的技术问题
-${oaReplyState.technicalProblemFeaturesSummary}
-${oaReplyState.technicalProblemStatement}
-${oaReplyState.technicalProblemEffectsAnalysis}
+${state.technicalProblemFeaturesSummary}
+${state.technicalProblemStatement}
+${state.technicalProblemEffectsAnalysis}
 2、非显而易见性的论述
-${oaReplyState.nonObviousnessAnalysisText}
+${state.nonObviousnessAnalysisText}
 三、在修改后的权利要求1具有创造性的基础上，其从属权利要求也均具备创造性。
 
 # **输出模板**:
@@ -959,20 +980,22 @@ ${oaReplyState.nonObviousnessAnalysisText}
             model: 'gemini-2.5-pro',
             contents: { parts: [{ text: assemblyPrompt }] },
         });
-        oaReplyState.totalCost += cost;
 
         const finalResponseText = response.text.trim();
-        oaReplyState.finalResponseText = finalResponseText;
+        oaReplyStore.setState(prevState => ({
+            totalCost: prevState.totalCost + cost,
+            finalResponseText: finalResponseText,
+        }));
 
         // Save to history
         const newEntry = {
           id: Date.now(),
           date: new Date().toLocaleString('zh-CN', { hour12: false }),
           files: {
-            application: oaReplyState.files.application?.name || null,
-            officeAction: oaReplyState.files.officeAction?.name || null,
-            reference1: oaReplyState.files.reference1?.name || null,
-            otherReferences: oaReplyState.files.otherReferences.map(f => f.name),
+            application: state.files.application?.name || null,
+            officeAction: state.files.officeAction?.name || null,
+            reference1: state.files.reference1?.name || null,
+            otherReferences: state.files.otherReferences.map(f => f.name),
           },
           finalResponseText: finalResponseText
         };
@@ -985,4 +1008,4 @@ ${oaReplyState.nonObviousnessAnalysisText}
         showToast(`最终答复文件生成失败: ${err.message}`, 5000);
         throw error;
     }
-}
+};

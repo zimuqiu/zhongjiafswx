@@ -7,6 +7,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { formalCheckHistoryDb } from './shared_formal_check_db.ts';
 import { showToast } from './shared_ui.ts';
 import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { createStore } from './shared_store.ts';
 
 // Set up PDF.js worker to run in the background
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@5.4.394/build/pdf.worker.mjs';
@@ -22,10 +23,13 @@ const getInitialFormalCheckState = () => ({
     selectedHistoryId: null as number | null,
     totalCost: 0,
 });
-export let formalCheckState = getInitialFormalCheckState();
 
-export const resetFormalCheckState = () => {
-    formalCheckState = getInitialFormalCheckState();
+const store = createStore(getInitialFormalCheckState());
+export const formalCheckStore = {
+    getState: store.getState,
+    setState: store.setState,
+    subscribe: store.subscribe,
+    resetState: () => store.setState(getInitialFormalCheckState())
 };
 
 // --- FEATURE CONSTANTS ---
@@ -108,18 +112,31 @@ export const formalCheckCategories = [
 ];
 
 // --- LOGIC FUNCTIONS ---
-const extractTextFromPageContent = (textContent, pageHeight: number, pageWidth: number): string => {
-    if (textContent.items.length === 0) return '';
+const extractTextFromPageContent = (textContent: any, pageHeight: number, pageWidth: number): string => {
+    const allItems = textContent.items;
+    if (allItems.length === 0) return '';
+
+    // Filter out items that are not text or are empty.
+    const textItems = allItems.filter(item => 'str' in item && item.str.trim());
+    if (textItems.length < 10) { // Not enough data for robust analysis, use a simple join.
+        return textItems.map(item => item.str).join('\n');
+    }
+
+    // --- Dynamic Margin Detection ---
+    // Get all X coordinates and sort them to calculate percentiles.
+    const xCoords = textItems.map(item => item.transform[4]);
+    xCoords.sort((a, b) => a - b);
+    
+    // Use 5th and 95th percentiles to define the core text area.
+    // This is robust against headers, footers, and side numbers which are outliers.
+    const leftMarginThreshold = xCoords[Math.floor(textItems.length * 0.05)];
+    const rightMarginThreshold = xCoords[Math.floor(textItems.length * 0.95)];
+    
+    // --- Header/Footer Detection ---
     const TOP_MARGIN_PERCENT = 0.08;
     const BOTTOM_MARGIN_PERCENT = 0.08;
-    // Tighter side margin to avoid accidentally removing numbers from the main text body.
-    const SIDE_MARGIN_PERCENT = 0.08;
-
     const topMarginThreshold = pageHeight * (1 - TOP_MARGIN_PERCENT);
     const bottomMarginThreshold = pageHeight * BOTTOM_MARGIN_PERCENT;
-    const leftMarginThreshold = pageWidth * SIDE_MARGIN_PERCENT;
-    const rightMarginThreshold = pageWidth * (1 - SIDE_MARGIN_PERCENT);
-
     const HEADER_FOOTER_REGEX = new RegExp([
         '^\\s*(-?\\s*\\d+\\s*-?)$',
         '^\\s*第\\s*\\d+\\s*页(?:\\s*[,，]?\\s*共\\s*\\d+\\s*页)?\\s*$',
@@ -127,17 +144,14 @@ const extractTextFromPageContent = (textContent, pageHeight: number, pageWidth: 
         'page',
         '^\\s*CN[\\s\\d.,-]*[A-ZBU]\\s*$'
     ].join('|'), 'i');
-
-    // More specific regex for side line numbers (e.g., 5, 10, 15...).
-    // This targets standalone, short, non-bracketed numbers found in margins.
     const SIDE_LINE_NUMBER_REGEX = /^\s*\d{1,3}\s*$/;
 
+    // --- Reconstruct Lines ---
     const lines = new Map<number, any[]>();
-    for (const item of textContent.items) {
-        if (!('str' in item) || !item.str.trim()) continue;
-
+    for (const item of textItems) {
         const x = item.transform[4];
-        // If a text item is a short number and it's in the side margin, skip it.
+        
+        // Filter out marginalia: items outside the dynamic content area that look like line numbers.
         if ((x < leftMarginThreshold || x > rightMarginThreshold) && SIDE_LINE_NUMBER_REGEX.test(item.str)) {
             continue;
         }
@@ -147,7 +161,7 @@ const extractTextFromPageContent = (textContent, pageHeight: number, pageWidth: 
         if (!lines.has(roundedY)) lines.set(roundedY, []);
         lines.get(roundedY)!.push(item);
     }
-
+    
     const sortedY = Array.from(lines.keys()).sort((a, b) => b - a);
     const pageLines: string[] = [];
     for (const y of sortedY) {
@@ -161,8 +175,6 @@ const extractTextFromPageContent = (textContent, pageHeight: number, pageWidth: 
         const isFooterZone = yCoord < bottomMarginThreshold;
         if ((isHeaderZone || isFooterZone) && HEADER_FOOTER_REGEX.test(lineText)) continue;
 
-        // This regex removes paragraph numbers like [0001] that are part of the main text body.
-        // It is safer than the previous version and avoids removing legitimate numbers.
         lineText = lineText.replace(/^\s*\[\d+\]\s*/, '').trim();
         if (lineText) pageLines.push(lineText);
     }
@@ -240,28 +252,27 @@ const countCharactersConsideringFormulas = (text: string): number => {
 
 // --- EVENT HANDLERS & MAIN FUNCTION ---
 export const handleStartFormalCheck = async () => {
-    if (!formalCheckState.file) {
+    const state = formalCheckStore.getState();
+    if (!state.file) {
         showToast('请先上传一个文件。');
         return;
     }
 
     const MAX_FILE_SIZE_MB = 10;
-    if (formalCheckState.file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+    if (state.file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         showToast(`文件大小不能超过 ${MAX_FILE_SIZE_MB}MB。`);
         return;
     }
 
     const onProgress = (message: string) => {
-        formalCheckState.loadingStep = message;
-        const loadingStepElement = document.getElementById('formal-check-loading-step');
-        if (loadingStepElement) loadingStepElement.textContent = message;
+        formalCheckStore.setState({ loadingStep: message });
     };
 
     try {
         await getAi(); // Ensure AI is initialized and key is provided before proceeding.
 
         onProgress('正在分析PDF并提取章节...');
-        const { sections: extractedSections } = await extractSectionsFromPdf(formalCheckState.file, onProgress);
+        const { sections: extractedSections } = await extractSectionsFromPdf(state.file, onProgress);
 
         const overallIssuesFromLocalCheck: { issue: string, suggestion: string }[] = [];
         const sectionsToExcludeForCount = ['摘要附图', '说明书附图'];
@@ -407,28 +418,29 @@ ${commonOverallRules}
             charCount: characterCount
         });
 
-        formalCheckState.totalCost = accumulatedCost;
-        formalCheckState.checkResult = finalResults;
+        const finalError = errors.length > 0 ? `部分类别检查失败:\n\n${errors.join('\n')}` : '';
+        formalCheckStore.setState({
+            totalCost: accumulatedCost,
+            checkResult: finalResults,
+            error: finalError,
+        });
         
-        if (errors.length > 0) formalCheckState.error = `部分类别检查失败:\n\n${errors.join('\n')}`;
         if (errors.length === 0) showToast('质检完成并已存入历史记录。');
         else showToast('部分质检成功，结果已存入历史记录。', 5000);
         
         formalCheckHistoryDb.addHistoryEntry({
             id: Date.now(),
             date: new Date().toLocaleString('zh-CN', { hour12: false }),
-            fileName: formalCheckState.file!.name,
+            fileName: state.file!.name,
             checkResult: finalResults,
-            totalCost: formalCheckState.totalCost,
+            totalCost: accumulatedCost,
         });
 
     } catch (error) {
         const err = error as Error;
-        formalCheckState.error = err.message;
-        // A specific toast for API key validation failure is already shown in getAi.
-        // Avoid showing a generic failure toast in that case.
+        formalCheckStore.setState({ error: err.message });
         if (err.message !== 'API Key validation failed.') {
-            showToast(`质检失败: ${formalCheckState.error}`, 5000);
+            showToast(`质检失败: ${err.message}`, 5000);
         }
     }
 };

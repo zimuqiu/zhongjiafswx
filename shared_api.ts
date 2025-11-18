@@ -73,7 +73,7 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
                 const stream = await aiClient.models.generateContentStream(params);
                 let aggregatedText = '';
                 for await (const chunk of stream) {
-                    aggregatedText += chunk.text;
+                    aggregatedText += (chunk.text || '');
                 }
                 return { text: aggregatedText };
             };
