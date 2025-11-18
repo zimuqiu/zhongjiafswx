@@ -308,36 +308,50 @@ const attachGlobalEventListeners = () => {
 // --- APP INITIALIZATION ---
 const initApp = () => {
     applyTheme(localStorage.getItem('theme') || 'light');
+
+    let initialAuthLoad = true;
+    let lastUid: string | null = null;
     
     auth.onAuthStateChanged(async (user) => {
         if (isProcessingAuthAction) {
             return; // Suppress navigation while a manual auth action is in progress
         }
-        
-        if (user) {
-            try {
-                await loadAndSetUserProfile(user);
-            } catch (error) {
-                console.error("Error fetching user profile during initial load:", error);
-                await auth.signOut();
-                setCurrentUserProfile(null);
-                showToast('加载用户资料失败，请重试。');
-            }
-        } else {
-            setCurrentUserProfile(null);
-        }
 
-        // Determine initial view after auth state is confirmed
-        const currentHash = window.location.hash.substring(1);
-        const validViews = ['dashboard', 'oa-reply', 'formal-quality-check', 'substantive-quality-check', 'priority-review-materials', 'user-management'];
-        
-        if (getCurrentUserProfile()) {
-            // If user is logged in, navigate to dashboard or the intended page
-            navigateTo(validViews.includes(currentHash) ? currentHash : 'dashboard');
-        } else {
-            // If user is not logged in, navigate to login or a public page
-            const publicViews = ['login', 'register', 'forgot-password'];
-            navigateTo(publicViews.includes(currentHash) ? currentHash : 'login');
+        const currentUid = user ? user.uid : null;
+        const userChanged = lastUid !== currentUid;
+        lastUid = currentUid;
+
+        // Only proceed if it's the first load or the user's login state has actually changed.
+        // This prevents re-navigation on background token refreshes.
+        if (initialAuthLoad || userChanged) {
+            initialAuthLoad = false; // The first check is now complete.
+            
+            if (user) {
+                try {
+                    await loadAndSetUserProfile(user);
+                } catch (error) {
+                    console.error("Error fetching user profile during state change:", error);
+                    await auth.signOut();
+                    setCurrentUserProfile(null);
+                    showToast('加载用户资料失败，请重试。');
+                    return; // The signOut will trigger the correct navigation flow.
+                }
+            } else {
+                setCurrentUserProfile(null);
+            }
+
+            // Determine initial view after auth state is confirmed
+            const currentHash = window.location.hash.substring(1);
+            const validViews = ['dashboard', 'oa-reply', 'formal-quality-check', 'substantive-quality-check', 'priority-review-materials', 'user-management'];
+            
+            if (getCurrentUserProfile()) {
+                // If user is logged in, navigate to dashboard or the intended page
+                navigateTo(validViews.includes(currentHash) ? currentHash : 'dashboard');
+            } else {
+                // If user is not logged in, navigate to login or a public page
+                const publicViews = ['login', 'register', 'forgot-password'];
+                navigateTo(publicViews.includes(currentHash) ? currentHash : 'login');
+            }
         }
     });
 };

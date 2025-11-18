@@ -5,6 +5,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { showToast } from './shared_ui.ts';
 import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { substantiveCheckHistoryDb } from './shared_formal_check_db.ts';
 
 // --- HELPER FUNCTIONS ---
 const fileToBase64 = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -36,13 +37,14 @@ const getMimeType = (fileName: string) => {
 const getInitialState = () => ({
     files: {
         application: null as File | null,
-        references: [] as File[],
     },
     isLoading: false,
     loadingStep: null as string | null,
-    checkResult: null as { noveltyAnalysis: string; inventiveStepAnalysis: string; issues: any[] } | null,
+    checkResult: null as { issues: any[] } | null,
     error: '',
     totalCost: 0,
+    viewMode: 'main' as 'main' | 'historyList' | 'historyDetail',
+    selectedHistoryId: null as number | null,
 });
 export let state = getInitialState();
 
@@ -53,8 +55,8 @@ export const resetState = () => {
 
 // --- LOGIC FUNCTIONS ---
 export const handleStartSubstantiveCheck = async () => {
-    if (!state.files.application || state.files.references.length === 0) {
-        showToast('请至少上传一份申请文件和一份对比文件。');
+    if (!state.files.application) {
+        showToast('请上传一份待质检的申请文件。');
         return;
     }
     
@@ -79,39 +81,34 @@ export const handleStartSubstantiveCheck = async () => {
 
         updateLoadingStep('正在转换申请文件...');
         const applicationPart = await fileToPart(state.files.application);
-        const referenceParts = [];
-        for (let i = 0; i < state.files.references.length; i++) {
-            updateLoadingStep(`正在转换对比文件 ${i + 1}/${state.files.references.length}...`);
-            const refFile = state.files.references[i];
-            const refPart = await fileToPart(refFile);
-            referenceParts.push({ text: `\n\n--- 对比文件 ${i+1} (${refFile.name}) ---\n` });
-            referenceParts.push(refPart);
-        }
-
+        
         const prompt = `
 # **角色**
-你是一位经验极其丰富的中国专利审查员，拥有超过15年的实质审查经验，对专利法第22条的新颖性和创造性有深刻理解。你的任务是对一份发明专利申请进行全面的实质性质检。
+你是一位极其资深的中国专利审查员，拥有超过20年的实质审查经验，对专利法第26条第3款关于“说明书应当对发明作出清楚、完整的说明，以所属技术领域的技术人员能够实现为准”的规定有着权威且深刻的理解。你的任务是扮演一名严苛的质量把关专家，对提供的专利申请文件进行全面的“公开不充分”风险排查。
 
 # **战略目标/任务**
-严格、客观地将“待检申请文件”的权利要求与一份或多份“对比文件”进行比较，以确定其是否满足新颖性（专利法第22条第2款）和创造性（专利法第22条第3款）的要求。
+严格、客观、全面地审查“待检申请文件”的说明书和权利要求书，识别并报告所有可能违反专利法第26条第3款的潜在缺陷。你的分析必须精准定位问题，并提供具有可操作性的修改建议。
 
-# **工作流程与分析框架**
+# **核心审查维度 (审查框架)**
+你必须从以下几个核心维度，对文件进行逐一审查：
 
-## **1. 新颖性审查 (Novelty - Article 22.2)**
-- **任务**: 逐一审查“待检申请文件”的每一项权利要求。
-- **方法**: 将该权利要求的技术方案与**每一份**“对比文件”中公开的内容进行**单独比对**。
-- **判断**: 如果某一项权利要求的所有技术特征被**某一份**对比文件**完全公开**，则该权利要求不具备新颖性。
-- **记录**: 详细记录不具备新颖性的权利要求、对应的对比文件以及理由。
+1.  **未解决的技术问题**:
+    -   说明书是否明确记载了发明所要解决的技术问题？
+    -   背景技术部分是否对现有技术的缺点进行了客观、恰当的描述，从而衬托出本发明的技术问题？
 
-## **2. 创造性审查 (Inventive Step - Article 22.3)**
-- **前提**: 只对具备新颖性的权利要求进行此项审查。
-- **方法**:
-    a. **确定最接近的现有技术**: 从所有对比文件中，找出一份与该权利要求技术领域相同、要解决的技术问题和技术效果最接近、且公开了最多技术特征的对比文件，将其作为“最接近的现有技术”。
-    b. **确定区别特征和实际解决的技术问题**: 找出该权利要求相对于“最接近的现有技术”的区别技术特征，并基于该区别特征所带来的技术效果，客观地重新确定发明实际解决的技术问题。
-    c. **判断非显而易见性**: 判断要求保护的发明对本领域的技术人员来说是否显而易见。重点判断：
-        - 在“最接近的现有技术”的基础上，结合**其他对比文件**或**本领域的公知常识**，是否给出了将上述区别特征应用到最接近的现有技术中以解决该实际技术问题的**技术启示**。
-        - 如果存在这种技术启示，则发明是显而易见的，不具备创造性。
-- **记录**: 详细记录不具备创造性的权利要求、判断所依据的对比文件组合、以及详细的“三步法”论证过程。
+2.  **技术方案不完整**:
+    -   说明书公开的技术方案是否足以解决其声称的技术问题？
+    -   是否缺少必要的结构、步骤、条件或参数，导致技术人员无法实施？
+    -   对于化学、生物等领域的发明，实施例是否充分，实验数据是否可靠？
+
+3.  **技术效果不可信**:
+    -   说明书记载的有益效果是否是本领域技术人员通过阅读全文能够合理预期或验证的？
+    -   是否存在夸大其词、缺乏实验数据支撑或与技术方案无直接因果关系的效果描述？
+
+4.  **权利要求得不到说明书支持**:
+    -   权利要求中概括的技术方案，是否能在说明书的具体实施方式中找到对应的、充分的支撑？
+    -   是否存在权利要求的保护范围宽泛，而说明书中仅给出了极少数孤立实施例的情况？
+    -   权利要求中的每一个技术特征，是否都能在说明书中找到明确、一致的记载？
 
 # **输出要求**
 你的最终输出**必须**是一个JSON对象，严格遵守所提供的模式。不要输出任何解释、注释或多余的文本。`;
@@ -119,51 +116,34 @@ export const handleStartSubstantiveCheck = async () => {
         const schema = {
             type: Type.OBJECT,
             properties: {
-                noveltyAnalysis: {
-                    type: Type.STRING,
-                    description: "对新颖性审查的总体结论性摘要。"
-                },
-                inventiveStepAnalysis: {
-                    type: Type.STRING,
-                    description: "对创造性审查的总体结论性摘要。"
-                },
                 issues: {
                     type: Type.ARRAY,
-                    description: "发现的具体问题列表。如果没有问题，则为空数组。",
+                    description: "发现的所有“公开不充分”问题的列表。如果没有问题，则为空数组。",
                     items: {
                         type: Type.OBJECT,
                         properties: {
-                            claimNumber: {
+                            issueCategory: {
                                 type: Type.STRING,
-                                description: "存在问题的权利要求的编号，例如 '权利要求 1'。"
-                            },
-                            issueType: {
-                                type: Type.STRING,
-                                description: "问题类型，必须是 '新颖性' 或 '创造性' 之一。"
-                            },
-                            referenceDocuments: {
-                                type: Type.ARRAY,
-                                description: "导致该问题的对比文件的名称列表。",
-                                items: { type: Type.STRING }
+                                description: "问题所属的类别，必须是 '未解决的技术问题'、'技术方案不完整'、'技术效果不可信' 或 '权利要求得不到说明书支持' 之一。"
                             },
                             reasoning: {
                                 type: Type.STRING,
-                                description: "详细的分析和论证过程，解释为什么不具备新颖性或创造性。对于创造性，应包含三步法分析。"
+                                description: "详细的分析和论证过程，解释为什么存在公开不充分的问题，并引用原文作为证据。"
                             },
                             suggestion: {
                                 type: Type.STRING,
-                                description: "针对该问题提出的修改或争辩建议。"
+                                description: "针对该问题提出的具体、可操作的修改或补充建议。"
                             }
                         },
-                        required: ["claimNumber", "issueType", "referenceDocuments", "reasoning", "suggestion"]
+                        required: ["issueCategory", "reasoning", "suggestion"]
                     }
                 }
             },
-            required: ["noveltyAnalysis", "inventiveStepAnalysis", "issues"]
+            required: ["issues"]
         };
 
         updateLoadingStep('正在调用AI进行分析...');
-        const contents = { parts: [{ text: prompt }, { text: `\n\n--- 待检申请文件 (${state.files.application.name}) ---\n` }, applicationPart, ...referenceParts] };
+        const contents = { parts: [{ text: prompt }, { text: `\n\n--- 待检申请文件 (${state.files.application.name}) ---\n` }, applicationPart] };
         
         const { response, cost } = await generateContentWithRetry({
             model: 'gemini-2.5-pro',
@@ -178,7 +158,15 @@ export const handleStartSubstantiveCheck = async () => {
             console.error("Failed to parse AI response:", response.text);
             throw new Error("模型返回了无效的数据格式。");
         }
-        showToast('实质质检完成！');
+        showToast('实质质检完成并已存入历史记录。');
+
+        substantiveCheckHistoryDb.addHistoryEntry({
+            id: Date.now(),
+            date: new Date().toLocaleString('zh-CN', { hour12: false }),
+            fileName: state.files.application!.name,
+            checkResult: state.checkResult,
+            totalCost: state.totalCost,
+        });
 
     } catch (error) {
         const err = error as Error;

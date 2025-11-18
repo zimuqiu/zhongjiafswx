@@ -40,3 +40,39 @@ export const formalCheckHistoryDb = {
         }
     }
 };
+
+// --- SUBSTANTIVE CHECK HISTORY DATABASE ---
+// This database stores the history of substantive quality checks performed by the user.
+export const substantiveCheckHistoryDb = {
+    /**
+     * Retrieves the history of substantive checks from localStorage.
+     * @returns {Array} An array of history entries, or an empty array if none exists or an error occurs.
+     */
+    getHistory: () => {
+        try {
+            const history = localStorage.getItem('substantive_check_history');
+            return history ? JSON.parse(history) : [];
+        } catch (e) {
+            console.error("Failed to parse substantive check history:", e);
+            return [];
+        }
+    },
+
+    /**
+     * Adds a new entry to the substantive check history.
+     * The history is capped at 50 entries.
+     * @param {object} entry - The history entry object to add.
+     */
+    addHistoryEntry: (entry) => {
+        const history = substantiveCheckHistoryDb.getHistory();
+        history.unshift(entry); // Add to the beginning to show newest first
+        if (history.length > 50) {
+            history.pop(); // Limit history size
+        }
+        try {
+            localStorage.setItem('substantive_check_history', JSON.stringify(history));
+        } catch (e) {
+            console.error("Failed to save substantive check history:", e);
+        }
+    }
+};

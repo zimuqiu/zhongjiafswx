@@ -8,20 +8,31 @@ import {
     resetState,
     handleStartSubstantiveCheck,
 } from './feature_substantive_quality_check.ts';
+import { substantiveCheckHistoryDb } from './shared_formal_check_db.ts';
 
 
 // --- RENDER FUNCTIONS ---
-const renderSidebar = () => `
+const renderSidebar = () => {
+    const isHistoryView = state.viewMode === 'historyList' || state.viewMode === 'historyDetail';
+    const historyBtnText = isHistoryView ? '返回质检' : '历史记录';
+    const historyBtnIcon = isHistoryView ? 'arrow_back' : 'history';
+
+    return `
     <aside class="h-full bg-gray-50 dark:bg-gray-800 w-64 p-4 flex flex-col border-r border-gray-200 dark:border-gray-700 shrink-0" style="width: 20rem;">
         <div class="flex-grow space-y-6">
             ${createFileUploadInput('substantive-check-application', '上传申请文件', false, '.pdf,.doc,.docx,.txt')}
-            ${createFileUploadInput('substantive-check-references', '上传对比文件', true, '.pdf,.doc,.docx,.txt')}
         </div>
         <div class="mt-auto space-y-4">
-            <button id="start-substantive-check-btn" class="w-full bg-blue-600 text-white font-bold p-3 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3" disabled>
-                <span class="material-symbols-outlined">gavel</span>
-                开始质检
-            </button>
+            <div class="space-y-2">
+                <button id="start-substantive-check-btn" class="w-full bg-blue-600 text-white font-bold p-3 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3" disabled>
+                    <span class="material-symbols-outlined">gavel</span>
+                    开始质检
+                </button>
+                <button id="view-substantive-check-history-btn" class="w-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold p-3 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center justify-center gap-3">
+                    <span class="material-symbols-outlined">${historyBtnIcon}</span>
+                    ${historyBtnText}
+                </button>
+            </div>
             <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
                 <button id="reset-substantive-check-btn" class="w-full bg-red-600 text-white font-bold p-3 rounded-full hover:bg-red-700 transition-colors flex items-center justify-center gap-3">
                     <span class="material-symbols-outlined">refresh</span>
@@ -30,121 +41,223 @@ const renderSidebar = () => `
             </div>
         </div>
     </aside>
-`;
+`};
 
-const renderResults = () => {
-    if (!state.checkResult) return '';
-
-    const { noveltyAnalysis, inventiveStepAnalysis, issues } = state.checkResult;
+const renderResults = (checkResult: { issues: any[] } | null, totalCost: number) => {
+    // FIX: Add a more robust type guard to ensure `checkResult.issues` is a valid array,
+    // especially when dealing with potentially malformed data from localStorage.
+    const issues = (checkResult as any)?.issues;
+    if (!Array.isArray(issues)) {
+        return '';
+    }
+    
     const totalIssues = issues.length;
+
+    const getCategoryIconAndColor = (category: string) => {
+        switch (category) {
+            case '未解决的技术问题': return { icon: 'help_outline', color: 'text-orange-600 dark:text-orange-400' };
+            case '技术方案不完整': return { icon: 'engineering', color: 'text-red-600 dark:text-red-400' };
+            case '技术效果不可信': return { icon: 'science', color: 'text-purple-600 dark:text-purple-400' };
+            case '权利要求得不到说明书支持': return { icon: 'link_off', color: 'text-yellow-600 dark:text-yellow-400' };
+            default: return { icon: 'error', color: 'text-gray-500' };
+        }
+    };
+
+    const groupedIssues = issues.reduce((acc, issue) => {
+        const category = issue.issueCategory;
+        if (!acc[category]) {
+            acc[category] = [];
+        }
+        acc[category].push(issue);
+        return acc;
+    }, {} as Record<string, any[]>);
 
     return `
         <div class="w-full max-w-5xl mx-auto">
             <div class="mb-8">
-                <h3 class="text-3xl font-bold">实质质检完成</h3>
+                <h3 class="text-3xl font-bold">公开不充分（26.3）质检完成</h3>
                 <div class="flex justify-between items-center mt-2">
                     <p class="text-gray-500 dark:text-gray-400">
-                        共发现 ${totalIssues} 个潜在的实质性问题。
+                        共发现 ${totalIssues} 个潜在的公开不充分问题。
                     </p>
                     <div class="flex items-center gap-2 text-lg">
                         <span class="material-symbols-outlined text-green-600 dark:text-green-400">payments</span>
                         <span class="font-semibold text-gray-700 dark:text-gray-200">本次质检AI消费:</span>
-                        <span class="font-bold text-green-600 dark:text-green-400">¥ ${state.totalCost.toFixed(4)}</span>
+                        <span class="font-bold text-green-600 dark:text-green-400">¥ ${totalCost.toFixed(4)}</span>
                     </div>
                 </div>
             </div>
 
-            <div class="space-y-8">
-                <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
-                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-3">新颖性分析摘要</h4>
-                    <p class="text-gray-600 dark:text-gray-300 whitespace-pre-wrap">${noveltyAnalysis}</p>
-                </div>
-                <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
-                    <h4 class="text-xl font-semibold text-gray-800 dark:text-gray-200 mb-3">创造性分析摘要</h4>
-                    <p class="text-gray-600 dark:text-gray-300 whitespace-pre-wrap">${inventiveStepAnalysis}</p>
-                </div>
-                
-                <div>
-                    <h4 class="text-2xl font-bold text-gray-800 dark:text-gray-200 mb-4 mt-10">潜在问题列表</h4>
-                    ${issues.length > 0 ? issues.map(item => `
-                        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700 mb-6">
-                            <details open class="group">
+            <div class="space-y-6">
+                 ${issues.length > 0 ? Object.entries(groupedIssues).map(([category, categoryIssues]) => {
+                    const { icon, color } = getCategoryIconAndColor(category);
+                    return `
+                        <div class="bg-white dark:bg-gray-800 p-6 rounded-lg border border-gray-200 dark:border-gray-700">
+                             <details open class="group">
                                 <summary class="flex justify-between items-center cursor-pointer list-none">
-                                    <div class="flex items-center gap-4">
-                                        <span class="font-bold text-lg text-gray-900 dark:text-gray-100">${item.claimNumber}</span>
-                                        <span class="font-semibold ${item.issueType === '新颖性' ? 'text-red-600 dark:text-red-400' : 'text-orange-600 dark:text-orange-400'}">${item.issueType}</span>
+                                    <div class="flex items-center gap-3">
+                                        <span class="material-symbols-outlined ${color}">${icon}</span>
+                                        <h4 class="text-xl font-semibold ${color}">${category}</h4>
                                     </div>
-                                    <span class="material-symbols-outlined transition-transform duration-200 group-open:rotate-180">expand_more</span>
+                                     <div class="flex items-center gap-2">
+                                        <span class="bg-red-100 text-red-800 text-xs font-medium me-2 px-2.5 py-0.5 rounded dark:bg-red-900 dark:text-red-300">${categoryIssues.length} 个问题</span>
+                                        <span class="material-symbols-outlined transition-transform duration-200 group-open:rotate-180">expand_more</span>
+                                    </div>
                                 </summary>
-                                <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-4">
-                                    <div>
-                                        <h5 class="font-semibold text-gray-700 dark:text-gray-300 mb-1">相关对比文件:</h5>
-                                        <p class="text-sm text-gray-600 dark:text-gray-400">${item.referenceDocuments.join(', ')}</p>
-                                    </div>
-                                    <div>
-                                        <h5 class="font-semibold text-gray-700 dark:text-gray-300 mb-1">问题分析:</h5>
-                                        <p class="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">${item.reasoning}</p>
-                                    </div>
-                                    <div>
-                                        <h5 class="font-semibold text-green-700 dark:text-green-400 mb-1">修改建议:</h5>
-                                        <p class="text-sm text-green-600 dark:text-green-300 whitespace-pre-wrap">${item.suggestion}</p>
+                                <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                                    <div class="space-y-6">
+                                        ${categoryIssues.map((item, index) => `
+                                            <div>
+                                                <h5 class="font-semibold text-gray-700 dark:text-gray-300 mb-1 flex items-baseline">
+                                                    ${categoryIssues.length > 1 ? `<span class="text-lg font-bold mr-2">${index + 1}.</span>` : ''}
+                                                    <span>问题分析:</span>
+                                                </h5>
+                                                <p class="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">${item.reasoning}</p>
+                                                <h5 class="font-semibold text-green-700 dark:text-green-400 mb-1 mt-3">修改建议:</h5>
+                                                <p class="text-sm text-green-600 dark:text-green-300 whitespace-pre-wrap">${item.suggestion}</p>
+                                            </div>
+                                        `).join('<hr class="my-6 border-gray-200 dark:border-gray-600">')}
                                     </div>
                                 </div>
-                            </details>
+                             </details>
                         </div>
-                    `).join('') : '<p class="text-gray-500 dark:text-gray-400">未发现具体的实质性问题。</p>'}
+                    `;
+                 }).join('') : `
+                    <div class="bg-white dark:bg-gray-800 p-10 rounded-lg text-center">
+                        <span class="material-symbols-outlined text-5xl text-green-500 mb-4">check_circle</span>
+                        <h4 class="text-2xl font-bold">检查通过</h4>
+                        <p class="text-gray-500 dark:text-gray-400 mt-2">未发现明显的公开不充分问题。</p>
+                    </div>
+                 `}
+            </div>
+        </div>
+    `;
+};
+
+const renderHistoryList = () => {
+    const history = substantiveCheckHistoryDb.getHistory();
+    const title = '质检历史记录';
+
+    // FIX: Add a robust type guard to check if history is an array before accessing array properties.
+    // This resolves compile errors when `history` is treated as 'unknown' due to being sourced from localStorage.
+    if (!Array.isArray(history) || history.length === 0) {
+        return `
+            <div class="flex flex-col items-center justify-center h-full text-center text-gray-500 dark:text-gray-400">
+                <span class="material-symbols-outlined text-6xl mb-4">history_toggle_off</span>
+                <h3 class="text-xl font-semibold">${title}</h3>
+                <p>暂无历史记录。</p>
+            </div>
+        `;
+    }
+
+    return `
+        <div class="w-full max-w-5xl mx-auto">
+            <h3 class="text-3xl font-bold mb-6">${title}</h3>
+            <div class="space-y-4">
+                ${history.map(entry => `
+                    <div class="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                        <div>
+                            <p class="font-semibold text-gray-800 dark:text-gray-200" title="${entry.fileName}">${entry.fileName}</p>
+                            <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">${entry.date}</p>
+                        </div>
+                        <button class="view-substantive-check-detail-btn bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors text-sm" data-history-id="${entry.id}">
+                            查看详情
+                        </button>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+};
+
+const renderHistoryDetail = () => {
+    const history = substantiveCheckHistoryDb.getHistory();
+    
+    // FIX: Add a robust type guard to ensure `history` is an array before calling `.find()`.
+    // This prevents runtime errors and compile errors if the data from localStorage is corrupted.
+    if (!Array.isArray(history)) {
+        state.viewMode = 'historyList';
+        state.selectedHistoryId = null;
+        return renderHistoryList();
+    }
+
+    const entry = history.find(item => item.id === state.selectedHistoryId);
+    if (!entry) {
+        state.viewMode = 'historyList';
+        state.selectedHistoryId = null;
+        return renderHistoryList();
+    }
+    
+    return `
+        <div class="w-full max-w-5xl mx-auto">
+            <div class="flex items-center gap-4 mb-6">
+                <button id="back-to-substantive-history-list" class="bg-transparent border-none text-gray-500 dark:text-gray-400 cursor-pointer p-2 rounded-full flex items-center justify-center hover:bg-gray-200 dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-white" aria-label="返回历史列表">
+                    <span class="material-symbols-outlined">arrow_back</span>
+                </button>
+                <div>
+                    <h3 class="text-3xl font-bold" title="${entry.fileName}">历史详情: ${entry.fileName}</h3>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">检查时间: ${entry.date}</p>
                 </div>
             </div>
+            ${renderResults(entry.checkResult, entry.totalCost)}
         </div>
     `;
 };
 
 
 const renderContent = () => {
-    if (state.isLoading) {
-        return `
-            <div class="flex flex-col items-center justify-center h-full">
-                <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
-                <p class="mt-4 text-lg font-semibold text-gray-700 dark:text-gray-300" id="substantive-check-loading-step">${state.loadingStep || '正在准备质检...'}</p>
-                <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">AI正在进行深度分析，请稍候。</p>
-            </div>
-        `;
-    }
+    switch (state.viewMode) {
+        case 'historyList':
+            return renderHistoryList();
+        case 'historyDetail':
+            return renderHistoryDetail();
+        case 'main':
+        default:
+            if (state.isLoading) {
+                return `
+                    <div class="flex flex-col items-center justify-center h-full">
+                        <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
+                        <p class="mt-4 text-lg font-semibold text-gray-700 dark:text-gray-300" id="substantive-check-loading-step">${state.loadingStep || '正在准备质检...'}</p>
+                        <p class="mt-2 text-sm text-gray-500 dark:text-gray-400">AI正在进行深度分析，请稍候。</p>
+                    </div>
+                `;
+            }
 
-    if (state.error) {
-        return `
-            <div class="max-w-2xl mx-auto text-center flex flex-col items-center justify-center">
-                <span class="material-symbols-outlined text-6xl mb-4 text-red-500">report_problem</span>
-                <h3 class="text-2xl font-bold mb-4 text-red-600 dark:text-red-400">质检时出现错误</h3>
-                <div class="bg-red-50 dark:bg-gray-800 border border-red-200 dark:border-red-700 p-4 rounded-lg text-left w-full">
-                    <pre class="text-red-700 dark:text-red-300 whitespace-pre-wrap font-sans text-sm">${state.error}</pre>
+            if (state.error) {
+                return `
+                    <div class="max-w-2xl mx-auto text-center flex flex-col items-center justify-center">
+                        <span class="material-symbols-outlined text-6xl mb-4 text-red-500">report_problem</span>
+                        <h3 class="text-2xl font-bold mb-4 text-red-600 dark:text-red-400">质检时出现错误</h3>
+                        <div class="bg-red-50 dark:bg-gray-800 border border-red-200 dark:border-red-700 p-4 rounded-lg text-left w-full">
+                            <pre class="text-red-700 dark:text-red-300 whitespace-pre-wrap font-sans text-sm">${state.error}</pre>
+                        </div>
+                        <p class="mt-6 text-sm text-gray-500 dark:text-gray-400">请在左侧点击“重新开始”按钮返回重试。</p>
+                    </div>
+                `;
+            }
+
+            if (state.checkResult) {
+                return renderResults(state.checkResult, state.totalCost);
+            }
+
+            return `
+                <div class="flex flex-col items-center justify-center h-full text-center text-gray-500 dark:text-gray-400">
+                    <span class="material-symbols-outlined text-6xl mb-4">gavel</span>
+                    <h3 class="text-xl font-semibold">准备开始公开不充分质检</h3>
+                    <p>请在左侧上传一份待检申请文件，然后点击“开始质检”。</p>
                 </div>
-                <p class="mt-6 text-sm text-gray-500 dark:text-gray-400">请在左侧点击“重新开始”按钮返回重试。</p>
-            </div>
-        `;
+            `;
     }
-
-    if (state.checkResult) {
-        return renderResults();
-    }
-
-    return `
-        <div class="flex flex-col items-center justify-center h-full text-center text-gray-500 dark:text-gray-400">
-            <span class="material-symbols-outlined text-6xl mb-4">gavel</span>
-            <h3 class="text-xl font-semibold">准备开始实质质检</h3>
-            <p>请在左侧上传一份申请文件和至少一份对比文件，然后点击“开始质检”。</p>
-        </div>
-    `;
 };
 
 
 const updateDOM = () => {
-    const ids = ['substantive-check-application', 'substantive-check-references'];
+    const ids = ['substantive-check-application'];
     ids.forEach(id => {
         const fileListContainer = document.getElementById(`${id}-file-list`);
         if (!fileListContainer) return;
 
-        const files = id === 'substantive-check-references' ? state.files.references : (state.files.application ? [state.files.application] : []);
+        const files = state.files.application ? [state.files.application] : [];
 
         fileListContainer.innerHTML = files.map(f => `
             <div class="bg-gray-200 dark:bg-gray-700 p-1 px-2 rounded-md text-xs flex justify-between items-center transition-all">
@@ -154,17 +267,62 @@ const updateDOM = () => {
                     <span class="material-symbols-outlined text-sm pointer-events-none">close</span>
                 </button>
             </div>
-        `).join('<div class="h-1"></div>');
+        `).join('');
     });
 
     const startBtn = document.getElementById('start-substantive-check-btn') as HTMLButtonElement;
     if (startBtn) {
-        startBtn.disabled = !state.files.application || state.files.references.length === 0;
+        startBtn.disabled = !state.files.application;
     }
 };
 
 
 // --- EVENT HANDLERS & BINDING ---
+const reRenderContent = () => {
+    const contentContainer = document.getElementById('substantive-check-content-container');
+    if (contentContainer) {
+        contentContainer.innerHTML = renderContent();
+    }
+}
+
+const attachFileInputListeners = () => {
+    const fileInput = document.getElementById('substantive-check-application') as HTMLInputElement;
+
+    if (fileInput) {
+        const handleFileChange = (files: FileList | null) => {
+            if (!files || files.length === 0) return;
+            state.files.application = files[0] || null;
+            updateDOM();
+        };
+
+        fileInput.addEventListener('change', (e) => {
+            handleFileChange((e.target as HTMLInputElement).files);
+        });
+
+        const dropArea = fileInput.closest('[data-upload-area]');
+        if (dropArea) {
+            dropArea.addEventListener('dragover', (e) => e.preventDefault());
+            dropArea.addEventListener('drop', (e: DragEvent) => {
+                e.preventDefault();
+                if (e.dataTransfer) handleFileChange(e.dataTransfer.files);
+            });
+        }
+    }
+    
+    updateDOM();
+};
+
+const updateView = () => {
+    const pageContainer = document.getElementById('substantive-check-page');
+    if (!pageContainer) return;
+    const sidebarContainer = pageContainer.querySelector('aside');
+    if (sidebarContainer) {
+        sidebarContainer.outerHTML = renderSidebar();
+    }
+    reRenderContent();
+    attachFileInputListeners();
+}
+
 const attachEventListeners = () => {
     const pageElement = document.getElementById('substantive-check-page');
     if (!pageElement) return;
@@ -176,10 +334,11 @@ const attachEventListeners = () => {
         const startBtn = target.closest('#start-substantive-check-btn');
         if (startBtn) {
             setTimeout(async () => {
+                const currentFile = state.files.application;
+                resetState();
+                state.files.application = currentFile;
                 state.isLoading = true;
                 state.loadingStep = '正在准备文件...';
-                state.checkResult = null;
-                state.error = '';
                 if (contentContainer) contentContainer.innerHTML = renderContent();
                 
                 await handleStartSubstantiveCheck();
@@ -194,7 +353,7 @@ const attachEventListeners = () => {
         const resetBtn = target.closest('#reset-substantive-check-btn');
         if (resetBtn) {
             resetState();
-            renderSubstantiveQualityCheckPage(document.getElementById('app')!);
+            updateView();
             return;
         }
 
@@ -204,49 +363,43 @@ const attachEventListeners = () => {
             const filename = removeBtn.getAttribute('data-filename');
             if (!inputId || !filename) return;
 
-            if (inputId === 'substantive-check-references') {
-                state.files.references = state.files.references.filter(f => f.name !== filename);
-            } else if (state.files.application?.name === filename) {
+            if (state.files.application?.name === filename) {
                 state.files.application = null;
             }
             updateDOM();
             showToast(`文件 "${filename}" 已移除。`);
+            return;
         }
-    });
 
-    const fileInputs = [
-        document.getElementById('substantive-check-application'),
-        document.getElementById('substantive-check-references')
-    ];
+        const historyBtn = target.closest('#view-substantive-check-history-btn');
+        if (historyBtn) {
+            state.viewMode = (state.viewMode === 'main') ? 'historyList' : 'main';
+            state.selectedHistoryId = null;
+            updateView();
+            return;
+        }
 
-    fileInputs.forEach(input => {
-        if (!input) return;
-        const handleFileChange = (files: FileList | null) => {
-            if (!files) return;
-            const inputId = input.id;
-            if (inputId === 'substantive-check-references') {
-                state.files.references.push(...Array.from(files));
-            } else {
-                state.files.application = files[0] || null;
+        const detailBtn = target.closest('.view-substantive-check-detail-btn');
+        if (detailBtn) {
+            const id = (detailBtn as HTMLElement).dataset.historyId;
+            if (id) {
+                state.selectedHistoryId = parseInt(id, 10);
+                state.viewMode = 'historyDetail';
+                reRenderContent();
             }
-            updateDOM();
-        };
+            return;
+        }
 
-        input.addEventListener('change', (e) => {
-            handleFileChange((e.target as HTMLInputElement).files);
-        });
-
-        const dropArea = input.closest('[data-upload-area]');
-        if (dropArea) {
-            dropArea.addEventListener('dragover', (e) => e.preventDefault());
-            dropArea.addEventListener('drop', (e: DragEvent) => {
-                e.preventDefault();
-                if (e.dataTransfer) handleFileChange(e.dataTransfer.files);
-            });
+        const backBtn = target.closest('#back-to-substantive-history-list');
+        if (backBtn) {
+            state.selectedHistoryId = null;
+            state.viewMode = 'historyList';
+            reRenderContent();
+            return;
         }
     });
-
-    updateDOM();
+    
+    attachFileInputListeners();
 };
 
 

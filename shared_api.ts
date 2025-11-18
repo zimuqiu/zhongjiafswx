@@ -68,13 +68,23 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
     for (let i = 0; i < retries; i++) {
         try {
             const inputChars = getInputChars(params.contents);
-            const apiCallPromise = aiClient.models.generateContent(params);
+            
+            const consumeStream = async (): Promise<{ text: string }> => {
+                const stream = await aiClient.models.generateContentStream(params);
+                let aggregatedText = '';
+                for await (const chunk of stream) {
+                    aggregatedText += chunk.text;
+                }
+                return { text: aggregatedText };
+            };
+            
+            const apiCallPromise = consumeStream();
+            
             const timeoutPromise = new Promise((_, reject) =>
                 setTimeout(() => reject(new Error(`请求超时（超过 ${requestTimeout / 1000} 秒）。`)), requestTimeout)
             );
 
-            // FIX: Cast the response from Promise.race to GenerateContentResponse to resolve the type error.
-            const response = await Promise.race([apiCallPromise, timeoutPromise]) as GenerateContentResponse;
+            const response = await Promise.race([apiCallPromise, timeoutPromise]) as { text: string };
             
             const outputChars = response.text?.length || 0;
             const cost = calculateCost(inputChars, outputChars);

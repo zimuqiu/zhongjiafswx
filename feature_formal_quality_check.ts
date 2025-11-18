@@ -43,15 +43,15 @@ export const formalCheckCategories = [
         category: '权利要求书',
         rules: `
 严格按照以下规则质检（不要过度联想）：
-1. 检查从属权利要求是否缺乏引用基础。
-2. 独立权利要求和从属权利要求的总项数是否为10项。
-3. 独立权利要求的总项数是否超过3项。
-4. 产品类独立权利要求是否正确划界，将与现有技术相同的特征写入前序部分，并在特征部分对前序部分中的特征作进一步限定。 (未质检)
-5. 权利要求是否清楚，是否存在否定性限定，或使用“约”、“接近”、“等”、“或类似物”、“可以”、“可”等模糊用语。
-6. 独立权利要求中是否包含复杂公式（允许使用初等函数等简单形式）。
-7. 独立权利要求中是否都包含“其特征在于”。
-8. 解释的参数与公式中的参数是否保持一致。
-9. 检查权利要求编号（如权利要求1、权利要求2等）格式是否正确，编号后应为“.”，而非顿号、逗号或冒号。
+1. **引用基础**：检查是否存在缺乏引用基础的**从属权利要求**。
+2. **总项数**：检查独立权利要求和从属权利要求的**总项数是否超过10项**。
+3. **独立权利要求项数**：检查**独立权利要求的总项数是否超过3项**。
+4. **划界**：产品类独立权利要求是否正确划界，将与现有技术相同的特征写入前序部分，并在特征部分对前序部分中的特征作进一步限定。 (此项无需AI质检)
+5. **清晰度**：检查权利要求是否清楚，是否存在**否定性限定**，或使用“**约**”、“**接近**”、“**等**”、“**或类似物**”、“**可以**”、“**可**”等模糊用语。
+6. **复杂公式**：检查**独立权利要求**中是否包含复杂公式（允许使用初等函数等简单形式）。
+7. **“其特征在于”**：检查**独立权利要求**中是否都包含“其特征在于”。
+8. **参数一致性**：检查解释的参数与公式中的参数是否保持一致。
+9. **编号格式**：检查权利要求编号（如权利要求1、权利要求2等）格式是否正确，编号后应为“**.**”，而非顿号、逗号或冒号。
 `
     },
     {
@@ -108,12 +108,18 @@ export const formalCheckCategories = [
 ];
 
 // --- LOGIC FUNCTIONS ---
-const extractTextFromPageContent = (textContent, pageHeight: number): string => {
+const extractTextFromPageContent = (textContent, pageHeight: number, pageWidth: number): string => {
     if (textContent.items.length === 0) return '';
     const TOP_MARGIN_PERCENT = 0.08;
     const BOTTOM_MARGIN_PERCENT = 0.08;
+    // Tighter side margin to avoid accidentally removing numbers from the main text body.
+    const SIDE_MARGIN_PERCENT = 0.08;
+
     const topMarginThreshold = pageHeight * (1 - TOP_MARGIN_PERCENT);
     const bottomMarginThreshold = pageHeight * BOTTOM_MARGIN_PERCENT;
+    const leftMarginThreshold = pageWidth * SIDE_MARGIN_PERCENT;
+    const rightMarginThreshold = pageWidth * (1 - SIDE_MARGIN_PERCENT);
+
     const HEADER_FOOTER_REGEX = new RegExp([
         '^\\s*(-?\\s*\\d+\\s*-?)$',
         '^\\s*第\\s*\\d+\\s*页(?:\\s*[,，]?\\s*共\\s*\\d+\\s*页)?\\s*$',
@@ -122,9 +128,20 @@ const extractTextFromPageContent = (textContent, pageHeight: number): string => 
         '^\\s*CN[\\s\\d.,-]*[A-ZBU]\\s*$'
     ].join('|'), 'i');
 
+    // More specific regex for side line numbers (e.g., 5, 10, 15...).
+    // This targets standalone, short, non-bracketed numbers found in margins.
+    const SIDE_LINE_NUMBER_REGEX = /^\s*\d{1,3}\s*$/;
+
     const lines = new Map<number, any[]>();
     for (const item of textContent.items) {
         if (!('str' in item) || !item.str.trim()) continue;
+
+        const x = item.transform[4];
+        // If a text item is a short number and it's in the side margin, skip it.
+        if ((x < leftMarginThreshold || x > rightMarginThreshold) && SIDE_LINE_NUMBER_REGEX.test(item.str)) {
+            continue;
+        }
+
         const y = item.transform[5];
         const roundedY = Math.round(y);
         if (!lines.has(roundedY)) lines.set(roundedY, []);
@@ -144,7 +161,9 @@ const extractTextFromPageContent = (textContent, pageHeight: number): string => 
         const isFooterZone = yCoord < bottomMarginThreshold;
         if ((isHeaderZone || isFooterZone) && HEADER_FOOTER_REGEX.test(lineText)) continue;
 
-        lineText = lineText.replace(/^\s*(?:\[\d+\]|\d{1,3}(?!\d))\s*/, '').trim();
+        // This regex removes paragraph numbers like [0001] that are part of the main text body.
+        // It is safer than the previous version and avoids removing legitimate numbers.
+        lineText = lineText.replace(/^\s*\[\d+\]\s*/, '').trim();
         if (lineText) pageLines.push(lineText);
     }
     return pageLines.join('\n');
@@ -162,7 +181,7 @@ const extractSectionsFromPdf = async (file: File, onProgress: (message: string) 
         const page = await pdf.getPage(pageNum);
         const textContent = await page.getTextContent();
         const viewport = page.getViewport({ scale: 1.0 });
-        const cleanBodyText = extractTextFromPageContent(textContent, viewport.height);
+        const cleanBodyText = extractTextFromPageContent(textContent, viewport.height, viewport.width);
         cleanPageTexts.push(cleanBodyText);
     }
 
@@ -263,6 +282,7 @@ export const handleStartFormalCheck = async () => {
 - 检查是否叠字，如果有叠字，判断语句是否通顺（例如：的的）
 - 检查是否同时出现两个标点（例如：。。或者，，或者，。）
 - 每句句子的句末需要有标点
+- **忽略换行处的空格问题**：由于文本提取自PDF，换行符处的空格可能不准确，请不要报告与换行符相关的多余或缺少空格的问题。
 `;
 
         const issueSchema = {
@@ -360,7 +380,7 @@ ${commonOverallRules}
                     const combinedIssues = [...localIssuesForCategory, ...aiIssues];
 
                     const categorySpecificIssues: {issue: string, suggestion: string}[] = [];
-                    const overallKeywords = ['叠字', '两个标点', '句末', '的的', '。。', '，。'];
+                    const overallKeywords = ['叠字', '两个标点', '句末', '的的', '。。', '，。', '空格'];
                     
                     for (const item of combinedIssues) {
                         if (overallKeywords.some(kw => item.issue.includes(kw))) {
