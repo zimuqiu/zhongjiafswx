@@ -226,7 +226,7 @@ justification: (string)
         const contents = { parts: [{ text: prompt }, ...fileParts] };
 
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-2.5-pro',
+            model: 'gemini-3-pro-preview',
             contents: contents,
             config: {
                 responseMimeType: "application/json",
@@ -344,7 +344,7 @@ export const generateAmendmentExplanation = async () => {
         const contents = { parts: [{ text: prompt }, {text: `selectedFeaturesJSON:\n${selectedFeaturesJSON}`}, applicationFilePart] };
         
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-2.5-pro',
+            model: 'gemini-3-pro-preview',
             contents: contents,
         });
         
@@ -444,7 +444,7 @@ ${selectedFeaturesText}
         };
 
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-2.5-pro',
+            model: 'gemini-3-pro-preview',
             contents: { parts: [{ text: prompt }] },
             config: {
                 responseMimeType: "application/json",
@@ -540,7 +540,7 @@ ${state.technicalProblemEffectsAnalysis}
 15. **最高优先级 - 学习对象与核心策略**：答复时，学习“参考知识”、“公众号-参考知识”以及“参考话术”中的内容，结合从“反驳策略手册”中选择的最合适的论证策略，针对审查意见中审查员的意见进行反驳，**并优先从作用的角度进行反驳**。
 16. **最高优先级 - 作用分析**：采用作用不同进行反驳时，得出作用不同后，必须说明区别特征在对比文件中不能起到其在本申请中所起到的何种作用。
 17. **最高优先级 - 策略应用**：从“反驳策略手册”中选择相应论证策略后，必须严格按照策略手册中的要求及格式进行反驳。
-
+18. **最高优先级 - 分析**：非显而易见性分析部分，对本申请的分析过程严禁引用本申请说明书中的内容，对本申请的分析过程的基础是权利要求1的内容，只可以依据有益效果分析部分的内容来论述。
 
 #**参考知识**
 
@@ -915,7 +915,7 @@ a1、“权利要求不符合《专利法》第22条第3款规定的创造性”
         const contents = { parts };
         
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-2.5-pro',
+            model: 'gemini-3-pro-preview',
             contents: contents,
         });
         
@@ -977,7 +977,7 @@ ${state.nonObviousnessAnalysisText}
 `;
 
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-2.5-pro',
+            model: 'gemini-3-pro-preview',
             contents: { parts: [{ text: assemblyPrompt }] },
         });
 

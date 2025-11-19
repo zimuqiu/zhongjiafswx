@@ -151,7 +151,7 @@ export const handleStartSubstantiveCheck = async () => {
         const contents = { parts: [{ text: prompt }, { text: `\n\n--- 待检申请文件 (${state.files.application.name}) ---\n` }, applicationPart] };
         
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-2.5-pro',
+            model: 'gemini-3-pro-preview',
             contents: contents,
             config: { responseMimeType: "application/json", responseSchema: schema },
         });

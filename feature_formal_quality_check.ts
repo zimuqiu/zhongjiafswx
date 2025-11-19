@@ -367,7 +367,7 @@ ${commonOverallRules}
             const contents = { parts: [{ text: prompt }, { text: `# 待检章节文本\n\n${sectionText}` }] };
 
             return generateContentWithRetry({
-                model: 'gemini-2.5-pro',
+                model: 'gemini-3-pro-preview',
                 contents: contents,
                 config: { responseMimeType: "application/json", responseSchema: issueSchema },
             });
