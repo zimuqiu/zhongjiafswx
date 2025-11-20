@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -46,6 +47,37 @@ export interface SubstantiveCheckHistoryEntry {
   fileName: string;
   checkResult: SubstantiveCheckResult | null;
   totalCost: number;
+}
+
+// Defines a single match item found during priority review scanning.
+export interface PriorityReviewMatchItem {
+    classification: string;
+    table: string;
+    domain: string;
+}
+
+// Defines the result structure for Priority Review.
+export interface PriorityReviewResultDB {
+    allClassifications: string[]; // All extracted classification numbers from the app file
+    allMatches: PriorityReviewMatchItem[]; // New: All potential matches found in the tables (Candidate Pool)
+    
+    // The "Best Match" selected by AI for keyword extraction
+    matchedClassification: string; 
+    matchedTable: string;
+    matchedDomain: string;
+    matchedKeywords: string[];
+    
+    reasoning: string; // Explanation of the logic
+}
+
+// Defines the structure for a single entry in the priority review history.
+export interface PriorityReviewHistoryEntry {
+    id: number;
+    date: string;
+    applicationFileName: string;
+    tableFileNames: string[];
+    checkResult: PriorityReviewResultDB | null;
+    totalCost: number;
 }
 
 
@@ -141,6 +173,48 @@ export const substantiveCheckHistoryDb = {
             localStorage.setItem('substantive_check_history', JSON.stringify(history));
         } catch (e) {
             console.error("Failed to save substantive check history:", e);
+        }
+    }
+};
+
+// --- PRIORITY REVIEW HISTORY DATABASE ---
+export const priorityReviewHistoryDb = {
+    /**
+     * Retrieves the history from localStorage.
+     */
+    getHistory: (): PriorityReviewHistoryEntry[] => {
+        const key = 'priority_review_history';
+        try {
+            const historyJSON = localStorage.getItem(key);
+            if (!historyJSON) return [];
+
+            const history = JSON.parse(historyJSON);
+            if (!Array.isArray(history)) {
+                console.warn("Corrupted priority review history found. Clearing it.");
+                localStorage.removeItem(key);
+                return [];
+            }
+            return history as PriorityReviewHistoryEntry[];
+        } catch (e) {
+            console.error("Failed to parse priority review history, clearing it:", e);
+            localStorage.removeItem(key);
+            return [];
+        }
+    },
+
+    /**
+     * Adds a new entry to the history.
+     */
+    addHistoryEntry: (entry: PriorityReviewHistoryEntry) => {
+        const history = priorityReviewHistoryDb.getHistory();
+        history.unshift(entry);
+        if (history.length > 50) {
+            history.pop();
+        }
+        try {
+            localStorage.setItem('priority_review_history', JSON.stringify(history));
+        } catch (e) {
+            console.error("Failed to save priority review history:", e);
         }
     }
 };
