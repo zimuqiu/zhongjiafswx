@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -23,17 +24,17 @@ const renderFormalCheckSidebar = () => {
         </div>
         <div class="mt-auto space-y-4">
             <div class="space-y-2">
-                <button id="start-formal-check-btn" class="w-full bg-blue-600 text-white font-bold p-3 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3" disabled>
+                <button id="start-formal-check-btn" type="button" class="w-full bg-blue-600 text-white font-bold p-3 rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-3" disabled>
                     <span class="material-symbols-outlined">science</span>
                     开始质检
                 </button>
-                <button id="view-formal-check-history-btn" class="w-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold p-3 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center justify-center gap-3">
+                <button id="view-formal-check-history-btn" type="button" class="w-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold p-3 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center justify-center gap-3">
                     <span class="material-symbols-outlined">${historyBtnIcon}</span>
                     ${historyBtnText}
                 </button>
             </div>
             <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
-                <button id="reset-formal-check-btn" class="w-full bg-red-600 text-white font-bold p-3 rounded-full hover:bg-red-700 transition-colors flex items-center justify-center gap-3">
+                <button id="reset-formal-check-btn" type="button" class="w-full bg-red-600 text-white font-bold p-3 rounded-full hover:bg-red-700 transition-colors flex items-center justify-center gap-3">
                     <span class="material-symbols-outlined">refresh</span>
                     重新开始
                 </button>
@@ -295,6 +296,7 @@ const attachFormalCheckEventListeners = () => {
 
         const detailBtn = target.closest('.view-formal-check-detail-btn');
         if (detailBtn) {
+            e.preventDefault();
             const id = (detailBtn as HTMLElement).dataset.historyId;
             if (id) {
                 // FIX: Update state via formalCheckStore.setState()
@@ -306,6 +308,7 @@ const attachFormalCheckEventListeners = () => {
 
         const backBtn = target.closest('#back-to-formal-history-list');
         if (backBtn) {
+            e.preventDefault();
             // FIX: Update state via formalCheckStore.setState()
             formalCheckStore.setState({ selectedHistoryId: null, viewMode: 'historyList' });
             reRenderContent();
@@ -314,6 +317,7 @@ const attachFormalCheckEventListeners = () => {
 
         const removeBtn = target.closest('.remove-file-btn');
         if (removeBtn) {
+            e.preventDefault();
             const filename = removeBtn.getAttribute('data-filename');
             // FIX: Access state via formalCheckStore.getState()
             if (formalCheckStore.getState().file?.name === filename) {
@@ -327,6 +331,7 @@ const attachFormalCheckEventListeners = () => {
 
         const startBtn = target.closest('#start-formal-check-btn');
         if (startBtn) {
+            e.preventDefault(); // Stop default submit behavior
             // Use setTimeout to ensure the current click event processing is complete
             // before we manipulate the DOM, preventing the double-click issue.
             setTimeout(async () => {
@@ -355,6 +360,7 @@ const attachFormalCheckEventListeners = () => {
 
         const historyBtn = target.closest('#view-formal-check-history-btn');
         if (historyBtn) {
+            e.preventDefault();
             // FIX: Access and update state via store
             const newViewMode = (formalCheckStore.getState().viewMode === 'main') ? 'historyList' : 'main';
             formalCheckStore.setState({ viewMode: newViewMode, selectedHistoryId: null });
@@ -364,6 +370,7 @@ const attachFormalCheckEventListeners = () => {
 
         const resetBtn = target.closest('#reset-formal-check-btn');
         if (resetBtn) {
+            e.preventDefault();
             formalCheckStore.resetState();
             updateView();
             return;

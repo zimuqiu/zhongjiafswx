@@ -112,103 +112,126 @@ export const formalCheckCategories = [
 ];
 
 // --- LOGIC FUNCTIONS ---
-const extractTextFromPageContent = (textContent: any, pageHeight: number, pageWidth: number): string => {
-    const allItems = textContent.items;
-    if (allItems.length === 0) return '';
 
-    // Filter out items that are not text or are empty.
-    const textItems = allItems.filter(item => 'str' in item && item.str.trim());
-    if (textItems.length < 10) { // Not enough data for robust analysis, use a simple join.
-        return textItems.map(item => item.str).join('\n');
-    }
-
-    // --- Dynamic Margin Detection ---
-    // Get all X coordinates and sort them to calculate percentiles.
-    const xCoords = textItems.map(item => item.transform[4]);
-    xCoords.sort((a, b) => a - b);
+// Helper: Convert a PDF page to a Base64 Image
+// Optimized (Plan 3): Reduced scale and quality for faster processing
+const renderPageAsImage = async (page: any): Promise<string> => {
+    const scale = 1.5; // Optimized from 2.0 to 1.5
+    const viewport = page.getViewport({ scale });
     
-    // Use 5th and 95th percentiles to define the core text area.
-    // This is robust against headers, footers, and side numbers which are outliers.
-    const leftMarginThreshold = xCoords[Math.floor(textItems.length * 0.05)];
-    const rightMarginThreshold = xCoords[Math.floor(textItems.length * 0.95)];
-    
-    // --- Header/Footer Detection ---
-    const TOP_MARGIN_PERCENT = 0.08;
-    const BOTTOM_MARGIN_PERCENT = 0.08;
-    const topMarginThreshold = pageHeight * (1 - TOP_MARGIN_PERCENT);
-    const bottomMarginThreshold = pageHeight * BOTTOM_MARGIN_PERCENT;
-    const HEADER_FOOTER_REGEX = new RegExp([
-        '^\\s*(-?\\s*\\d+\\s*-?)$',
-        '^\\s*第\\s*\\d+\\s*页(?:\\s*[,，]?\\s*共\\s*\\d+\\s*页)?\\s*$',
-        '^\\s*\\d+\\s*\\/\\s*\\d+\\s*$',
-        'page',
-        '^\\s*CN[\\s\\d.,-]*[A-ZBU]\\s*$'
-    ].join('|'), 'i');
-    const SIDE_LINE_NUMBER_REGEX = /^\s*\d{1,3}\s*$/;
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    canvas.height = viewport.height;
+    canvas.width = viewport.width;
 
-    // --- Reconstruct Lines ---
-    const lines = new Map<number, any[]>();
-    for (const item of textItems) {
-        const x = item.transform[4];
-        
-        // Filter out marginalia: items outside the dynamic content area that look like line numbers.
-        if ((x < leftMarginThreshold || x > rightMarginThreshold) && SIDE_LINE_NUMBER_REGEX.test(item.str)) {
-            continue;
-        }
+    if (!context) throw new Error("Failed to create canvas context");
 
-        const y = item.transform[5];
-        const roundedY = Math.round(y);
-        if (!lines.has(roundedY)) lines.set(roundedY, []);
-        lines.get(roundedY)!.push(item);
-    }
-    
-    const sortedY = Array.from(lines.keys()).sort((a, b) => b - a);
-    const pageLines: string[] = [];
-    for (const y of sortedY) {
-        const lineItems = lines.get(y)!;
-        lineItems.sort((a, b) => a.transform[4] - b.transform[4]);
-        let lineText = lineItems.map(item => item.str).join('').trim();
-        if (!lineText) continue;
+    await page.render({
+        canvasContext: context,
+        viewport: viewport
+    }).promise;
 
-        const yCoord = lineItems[0].transform[5];
-        const isHeaderZone = yCoord > topMarginThreshold;
-        const isFooterZone = yCoord < bottomMarginThreshold;
-        if ((isHeaderZone || isFooterZone) && HEADER_FOOTER_REGEX.test(lineText)) continue;
-
-        lineText = lineText.replace(/^\s*\[\d+\]\s*/, '').trim();
-        if (lineText) pageLines.push(lineText);
-    }
-    return pageLines.join('\n');
+    // Optimized from 0.8 to 0.6 to reduce payload size
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    // Remove header to get pure base64
+    return dataUrl.split(',')[1];
 };
 
-const extractSectionsFromPdf = async (file: File, onProgress: (message: string) => void): Promise<{ sections: Record<string, string>, fullText: string }> => {
+// Updated: Uses Vision Model to extract text and formulas with Parallel Chunking (Plan 2)
+const extractSectionsFromPdfWithVision = async (file: File, onProgress: (message: string) => void): Promise<{ sections: Record<string, string>, totalCost: number }> => {
     onProgress('正在加载PDF文件...');
     const typedarray = new Uint8Array(await file.arrayBuffer());
     const pdf = await pdfjsLib.getDocument(typedarray).promise;
 
-    const cleanPageTexts: string[] = [];
-    onProgress('正在提取所有页面文本...');
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        onProgress(`正在处理第 ${pageNum}/${pdf.numPages} 页...`);
-        const page = await pdf.getPage(pageNum);
-        const textContent = await page.getTextContent();
-        const viewport = page.getViewport({ scale: 1.0 });
-        const cleanBodyText = extractTextFromPageContent(textContent, viewport.height, viewport.width);
-        cleanPageTexts.push(cleanBodyText);
+    // Chunk configuration
+    const PAGES_PER_CHUNK = 5; 
+    const maxPagesToProcess = 50; // Slightly increased limit as we are optimizing
+    const numPages = Math.min(pdf.numPages, maxPagesToProcess);
+    
+    const chunks: number[][] = [];
+    for (let i = 1; i <= numPages; i += PAGES_PER_CHUNK) {
+        const chunkPages = [];
+        for (let j = 0; j < PAGES_PER_CHUNK && (i + j) <= numPages; j++) {
+            chunkPages.push(i + j);
+        }
+        chunks.push(chunkPages);
     }
 
-    const fullText = cleanPageTexts.join('\n\n').trim();
-    onProgress('正在根据标题切分章节...');
+    onProgress(`PDF共 ${numPages} 页，将分为 ${chunks.length} 组并行进行AI视觉识别...`);
 
+    let totalCost = 0;
+    const chunkTexts = new Array(chunks.length).fill('');
+    let completedChunks = 0;
+
+    // Helper function to process a single chunk
+    const processChunk = async (pageNumbers: number[], chunkIndex: number) => {
+        const imageParts: any[] = [];
+        for (const pageNum of pageNumbers) {
+            const page = await pdf.getPage(pageNum);
+            const base64Image = await renderPageAsImage(page);
+            imageParts.push({
+                inlineData: {
+                    mimeType: 'image/jpeg',
+                    data: base64Image
+                }
+            });
+        }
+
+        const prompt = `
+# 角色任务
+你是一个高精度的专利文档数字化专家。你的任务是将提供的专利文档片段图片转换为清晰、结构化的Markdown文本。
+
+# 核心要求
+1.  **公式还原 (至关重要)**：
+    -   识别文中所有的数学公式、化学反应式和变量。
+    -   **必须**将它们转换为标准的 **LaTeX 格式**，并用单个美元符号包裹（例如 \`$E=mc^2$\`）。
+    -   特别注意还原上下标、希腊字母和特殊符号，修复可能因图片模糊导致的识别错误。
+2.  **结构保留**：
+    -   保留标准的专利章节标题（如“摘要”、“权利要求书”、“技术领域”、“背景技术”、“发明内容”、“附图说明”、“具体实施方式”），使用 Markdown 的二级标题（##）标记。
+    -   如果图片包含页眉、页脚或行号，请去除，只保留正文。
+3.  **内容完整**：
+    -   按顺序输出图片中的所有文字内容，不要进行摘要或省略。
+    -   直接输出内容，不要添加“以下是识别结果”等引导语。
+`;
+
+        // Call Gemini 3 Pro for this chunk
+        const { response, cost } = await generateContentWithRetry({
+            model: 'gemini-3-pro-preview',
+            contents: {
+                parts: [{ text: prompt }, ...imageParts]
+            }
+        });
+
+        return { text: response.text.trim(), cost };
+    };
+
+    // Execute chunks in parallel
+    // We map each chunk to a promise and wait for all of them.
+    const promises = chunks.map((pages, index) => 
+        processChunk(pages, index).then(result => {
+            chunkTexts[index] = result.text;
+            totalCost += result.cost;
+            completedChunks++;
+            onProgress(`正在AI识别中... 已完成 ${completedChunks}/${chunks.length} 组`);
+        })
+    );
+
+    await Promise.all(promises);
+
+    const fullText = chunkTexts.join('\n\n');
+    
+    onProgress('AI识别完成，正在切分章节...');
+
+    // Updated regex to handle potential Markdown headers (##) or plain text headers
     const titleRegexes = [
-        { title: '摘要', regex: /^\s*(?:说明书)?\s*摘\s*要\s*$/m },
-        { title: '摘要附图', regex: /^\s*摘\s*要\s*附\s*图\s*$/m },
-        { title: '权利要求书', regex: /^\s*权\s*利\s*要\s*求\s*书\s*$/m },
-        { title: '技术领域', regex: /^\s*技\s*术\s*领\s*域\s*$/m },
-        { title: '背景技术', regex: /^\s*背\s*景\s*技\s*术\s*$/m },
-        { title: '发明内容', regex: /^\s*发\s*明\s*内\s*容\s*$/m },
-        { title: '附图说明', regex: /^\s*附\s*图\s*说\s*明\s*$/m },
-        { title: '具体实施方式', regex: /^\s*具\s*体\s*实\s*施\s*方\s*式\s*$/m },
+        { title: '摘要', regex: /^\s*(?:##\s*)?(?:说明书)?\s*摘\s*要\s*$/m },
+        { title: '摘要附图', regex: /^\s*(?:##\s*)?摘\s*要\s*附\s*图\s*$/m },
+        { title: '权利要求书', regex: /^\s*(?:##\s*)?权\s*利\s*要\s*求\s*书\s*$/m },
+        { title: '技术领域', regex: /^\s*(?:##\s*)?技\s*术\s*领\s*域\s*$/m },
+        { title: '背景技术', regex: /^\s*(?:##\s*)?背\s*景\s*技\s*术\s*$/m },
+        { title: '发明内容', regex: /^\s*(?:##\s*)?发\s*明\s*内\s*容\s*$/m },
+        { title: '附图说明', regex: /^\s*(?:##\s*)?附\s*图\s*说\s*明\s*$/m },
+        { title: '具体实施方式', regex: /^\s*(?:##\s*)?具\s*体\s*实\s*施\s*方\s*式\s*$/m },
     ];
     
     const sections: Record<string, string> = {};
@@ -228,6 +251,7 @@ const extractSectionsFromPdf = async (file: File, onProgress: (message: string) 
         const nextSection = foundSections[i + 1];
         const endIndex = nextSection ? nextSection.index : fullText.length;
         let sectionText = fullText.substring(startIndex, endIndex);
+        // Remove the title line itself
         sectionText = sectionText.replace(section.regex, '').trim();
         sections[section.title] = sectionText;
     });
@@ -241,13 +265,19 @@ const extractSectionsFromPdf = async (file: File, onProgress: (message: string) 
         finalSections[cat.category] = sections[cat.category] || '';
     });
     
-    return { sections: finalSections, fullText };
+    return { sections: finalSections, totalCost: totalCost };
 };
 
 const countCharactersConsideringFormulas = (text: string): number => {
-    const formulaRegex = /\b\S+(?:\s*[-+*\/=<>≤≥]\s*\S+)+\b/g;
-    const textWithFormulasReplaced = text.replace(formulaRegex, 'F');
-    return textWithFormulasReplaced.replace(/[\s\u200B-\u200D\uFEFF]/g, '').length;
+    // Match standard LaTeX formulas ($...$)
+    const latexFormulaRegex = /\$[^$]+\$/g;
+    // Keep legacy heuristic for non-converted parts just in case
+    const legacyFormulaRegex = /\b\S+(?:\s*[-+*\/=<>≤≥]\s*\S+)+\b/g;
+    
+    let processedText = text.replace(latexFormulaRegex, 'F');
+    processedText = processedText.replace(legacyFormulaRegex, 'F');
+    
+    return processedText.replace(/[\s\u200B-\u200D\uFEFF]/g, '').length;
 };
 
 // --- EVENT HANDLERS & MAIN FUNCTION ---
@@ -258,6 +288,8 @@ export const handleStartFormalCheck = async () => {
         return;
     }
 
+    // Increased limit slightly as we aren't strictly parsing text client-side anymore, 
+    // but images add up. 10MB is still a reasonable safety net.
     const MAX_FILE_SIZE_MB = 10;
     if (state.file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         showToast(`文件大小不能超过 ${MAX_FILE_SIZE_MB}MB。`);
@@ -271,21 +303,14 @@ export const handleStartFormalCheck = async () => {
     try {
         await getAi(); // Ensure AI is initialized and key is provided before proceeding.
 
-        onProgress('正在分析PDF并提取章节...');
-        const { sections: extractedSections } = await extractSectionsFromPdf(state.file, onProgress);
+        // Step 1: Extract sections using Vision Model with Parallel Chunking
+        const { sections: extractedSections, totalCost: extractionCost } = await extractSectionsFromPdfWithVision(state.file, onProgress);
+        
+        let accumulatedCost = extractionCost;
 
+        // Step 2: Perform checks on the extracted Markdown text
+        
         const overallIssuesFromLocalCheck: { issue: string, suggestion: string }[] = [];
-        const sectionsToExcludeForCount = ['摘要附图', '说明书附图'];
-        const characterCount = Object.entries(extractedSections)
-            .filter(([sectionName]) => !sectionsToExcludeForCount.includes(sectionName))
-            .reduce((total, [, sectionText]) => total + countCharactersConsideringFormulas(sectionText), 0);
-
-        if (characterCount < 10000) {
-            overallIssuesFromLocalCheck.push({
-                issue: '机械领域总字数（含标点，不含空格）不足1W字。',
-                suggestion: `当前总字数（约 ${characterCount} 字）不满足要求，请扩充说明书等部分的内容。`
-            });
-        }
         
         onProgress(`正在并行检查所有 ${formalCheckCategories.length} 个类别...`);
         
@@ -293,7 +318,7 @@ export const handleStartFormalCheck = async () => {
 - 检查是否叠字，如果有叠字，判断语句是否通顺（例如：的的）
 - 检查是否同时出现两个标点（例如：。。或者，，或者，。）
 - 每句句子的句末需要有标点
-- **忽略换行处的空格问题**：由于文本提取自PDF，换行符处的空格可能不准确，请不要报告与换行符相关的多余或缺少空格的问题。
+- **忽略换行处的空格问题**：文本已转换为Markdown格式，请忽略Markdown语法中的标准换行和段落间距。
 `;
 
         const issueSchema = {
@@ -337,7 +362,7 @@ export const handleStartFormalCheck = async () => {
             const prompt = `# **角色与指令 (Role and Directives)**
 你是一位经验极其丰富的中国专利代理人，同时也是一位顶级的中文校对专家，拥有超过20年的从业经验，对专利申请文件的形式要求和文字准确性了如指掌。你的任务是扮演一名严谨细致的质量审核专家，对提供的专利文件章节进行全面的形式质检和错别字校对。
 
-你的所有判断**必须**严格基于我发送给你的“待检章节文本”。你将同时依据【类别规则】、【通用规则】和【错别字校对】三项任务进行检查，并以专业、清晰的语言指出所有发现的问题。
+你的所有判断**必须**严格基于我发送给你的“待检章节文本”（Markdown格式）。你将同时依据【类别规则】、【通用规则】和【错别字校对】三项任务进行检查，并以专业、清晰的语言指出所有发现的问题。
 
 # **核心工作流程 (Core Workflow)**
 对于下方规则中的每一条，你都**必须**遵循以下思考和执行步骤：
@@ -364,7 +389,7 @@ ${commonOverallRules}
 - 不要输出任何解释、注释或多余的文本。直接输出JSON数组。
 `;
             
-            const contents = { parts: [{ text: prompt }, { text: `# 待检章节文本\n\n${sectionText}` }] };
+            const contents = { parts: [{ text: prompt }, { text: `# 待检章节文本 (Markdown)\n\n${sectionText}` }] };
 
             return generateContentWithRetry({
                 model: 'gemini-3-pro-preview',
@@ -377,7 +402,6 @@ ${commonOverallRules}
         
         const finalResults: any[] = [];
         const errors: string[] = [];
-        let accumulatedCost = 0;
         const allOverallIssuesFromAPI: {issue: string, suggestion: string}[] = [];
         
         categoryResults.forEach((result, index) => {
@@ -414,8 +438,7 @@ ${commonOverallRules}
         const uniqueOverallIssuesFromAPI = Array.from(new Map(allOverallIssuesFromAPI.map(item => [item.issue, item])).values());
         finalResults.push({
             category: '总体',
-            issues: [...overallIssuesFromLocalCheck, ...uniqueOverallIssuesFromAPI],
-            charCount: characterCount
+            issues: [...overallIssuesFromLocalCheck, ...uniqueOverallIssuesFromAPI]
         });
 
         const finalError = errors.length > 0 ? `部分类别检查失败:\n\n${errors.join('\n')}` : '';
