@@ -38,8 +38,8 @@ export const formalCheckCategories = [
         category: '摘要',
         rules: `
 严格按照以下规则质检（不要过度联想）：
-1. 技术领域需与说明书中技术领域保持一致 (未质检)
-2. 案件名称需与发明名称一致
+1. **技术领域一致性**：检查摘要中记载的“涉及...技术领域”与说明书中“技术领域”章节记载的内容是否一致。
+2. **发明名称一致性**：检查摘要中记载的“具体涉及...”后面的发明名称与说明书中的发明名称是否一致。
 3. 字数（含标点）不得超过300字
 `
     },
@@ -62,7 +62,7 @@ export const formalCheckCategories = [
         category: '技术领域',
         rules: `
 严格按照以下规则质检（不要过度联想）：
-1. 技术领域需与摘要的技术领域保持一致 (未质检)
+1. **一致性**：检查本章节记载的技术领域是否与“摘要”中记载的技术领域保持一致。
 `
     },
     {
@@ -165,17 +165,19 @@ const extractSectionsFromPdfWithVision = async (file: File, onProgress: (message
 
     // Helper function to process a single chunk
     const processChunk = async (pageNumbers: number[], chunkIndex: number) => {
-        const imageParts: any[] = [];
-        for (const pageNum of pageNumbers) {
+        // Parallelize page rendering within the chunk
+        const imagePartsPromises = pageNumbers.map(async (pageNum) => {
             const page = await pdf.getPage(pageNum);
             const base64Image = await renderPageAsImage(page);
-            imageParts.push({
+            return {
                 inlineData: {
                     mimeType: 'image/jpeg',
                     data: base64Image
                 }
-            });
-        }
+            };
+        });
+
+        const imageParts = await Promise.all(imagePartsPromises);
 
         const prompt = `
 # 角色任务
@@ -265,6 +267,10 @@ const extractSectionsFromPdfWithVision = async (file: File, onProgress: (message
         finalSections[cat.category] = sections[cat.category] || '';
     });
     
+    // 额外保留摘要和技术领域，以便后续进行交叉比对（即使用户未明确要求检查这些章节）
+    if (sections['技术领域']) finalSections['技术领域'] = sections['技术领域'];
+    if (sections['摘要']) finalSections['摘要'] = sections['摘要'];
+
     return { sections: finalSections, totalCost: totalCost };
 };
 
@@ -340,8 +346,15 @@ export const handleStartFormalCheck = async () => {
         const checkPromises = formalCheckCategories.map(category => {
             const sectionText = extractedSections[category.category];
             let categoryRules = category.rules;
+            let additionalContext = "";
 
+            // 交叉引用逻辑：为“摘要”和“技术领域”提供对比文本
             if (category.category === '摘要') {
+                const techFieldText = extractedSections['技术领域'];
+                if (techFieldText) {
+                    additionalContext = `\n\n## 参考对比文本：说明书-技术领域\n${techFieldText}\n\n(请基于上述参考文本，检查摘要中的“技术领域”和“发明名称”是否与之一致)`;
+                }
+                
                 const charCount = countCharactersConsideringFormulas(sectionText);
                 categoryMetadata.set(category.category, { charCount });
             
@@ -353,6 +366,12 @@ export const handleStartFormalCheck = async () => {
                     });
                 }
                 categoryRules = categoryRules.split('\n').filter(line => !line.includes('字数（含标点）不得超过300字')).join('\n');
+            } 
+            else if (category.category === '技术领域') {
+                const abstractText = extractedSections['摘要'];
+                if (abstractText) {
+                    additionalContext = `\n\n## 参考对比文本：说明书-摘要\n${abstractText}\n\n(请基于上述参考文本，检查本段落的技术领域描述是否与摘要一致)`;
+                }
             }
 
             if (!sectionText || sectionText.trim() === '' || categoryRules.trim() === '') {
@@ -362,12 +381,12 @@ export const handleStartFormalCheck = async () => {
             const prompt = `# **角色与指令 (Role and Directives)**
 你是一位经验极其丰富的中国专利代理人，同时也是一位顶级的中文校对专家，拥有超过20年的从业经验，对专利申请文件的形式要求和文字准确性了如指掌。你的任务是扮演一名严谨细致的质量审核专家，对提供的专利文件章节进行全面的形式质检和错别字校对。
 
-你的所有判断**必须**严格基于我发送给你的“待检章节文本”（Markdown格式）。你将同时依据【类别规则】、【通用规则】和【错别字校对】三项任务进行检查，并以专业、清晰的语言指出所有发现的问题。
+你的所有判断**必须**严格基于我发送给你的“待检章节文本”（Markdown格式）以及可能提供的“参考对比文本”。你将同时依据【类别规则】、【通用规则】和【错别字校对】三项任务进行检查，并以专业、清晰的语言指出所有发现的问题。
 
 # **核心工作流程 (Core Workflow)**
 对于下方规则中的每一条，你都**必须**遵循以下思考和执行步骤：
 1.  **专业审查 (Professional Review)**: 像一位资深代理人一样，仔细阅读“待检章节文本”，在上下文中理解并定位与规则相关的具体表述或格式。
-2.  **精确判断 (Precise Judgment)**: 基于你的专业知识，判断定位到的文本是否违反了规则。
+2.  **精确判断 (Precise Judgment)**: 基于你的专业知识，判断定位到的文本是否违反了规则。如果规则涉及一致性检查，请务必对照“参考对比文本”。
 3.  **清晰报告 (Clear Reporting)**: 如果发现违反规则的情况，就生成一个问题对象，用专业且易于理解的语言描述问题并提出修改建议。如果完全符合规则，则不生成任何内容。
 
 # **当前任务: “${category.category}” 类别质检**
@@ -389,7 +408,7 @@ ${commonOverallRules}
 - 不要输出任何解释、注释或多余的文本。直接输出JSON数组。
 `;
             
-            const contents = { parts: [{ text: prompt }, { text: `# 待检章节文本 (Markdown)\n\n${sectionText}` }] };
+            const contents = { parts: [{ text: prompt }, { text: `# 待检章节文本 (Markdown)\n\n${sectionText}${additionalContext}` }] };
 
             return generateContentWithRetry({
                 model: 'gemini-3-pro-preview',

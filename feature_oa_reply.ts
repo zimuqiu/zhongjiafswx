@@ -1009,3 +1009,33 @@ ${state.nonObviousnessAnalysisText}
         throw error;
     }
 };
+
+export const handleOneClickGeneration = async () => {
+    try {
+        // Plan 3: Parallelize independent steps to improve speed while keeping the Pro model for quality.
+        
+        // 1 & 2. Generate Amendment Explanation AND Technical Problem Analysis in parallel
+        // These two steps depend only on the user's selection and uploaded files, not on each other.
+        oaReplyStore.setState({ loadingStep: '正在并行生成修改说明与确定技术问题...' });
+        
+        await Promise.all([
+            generateAmendmentExplanation(),
+            generateTechnicalProblemAnalysis()
+        ]);
+
+        // 3. Generate Non-Obviousness Analysis
+        // This depends on the output of Technical Problem Analysis.
+        oaReplyStore.setState({ loadingStep: '正在生成非显而易见性分析...' });
+        await generateNonObviousnessAnalysis();
+
+        // 4. Generate Final Response
+        // This aggregates all previous outputs.
+        oaReplyStore.setState({ loadingStep: '正在生成最终答复文件...' });
+        await generateFinalResponse();
+
+    } catch (error) {
+        console.error("One-click generation interrupted:", error);
+        // Error toast is handled by the individual functions
+        throw error; 
+    }
+};

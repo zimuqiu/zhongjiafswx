@@ -14,6 +14,7 @@ import {
     generateTechnicalProblemAnalysis,
     generateNonObviousnessAnalysis,
     generateFinalResponse,
+    handleOneClickGeneration,
     oaHistoryDb
 } from './feature_oa_reply.ts';
 
@@ -27,12 +28,19 @@ const oaNavItems = [
     { id: 'technical-problem', label: '确定技术问题', icon: 'biotech' },
     { id: 'non-obviousness', label: '非显而易见性分析', icon: 'lightbulb' },
     { id: 'final-response', label: '最终答复文件', icon: 'assignment_turned_in' },
-    { id: 'history', label: '历史记录', icon: 'history' },
 ];
 
 const renderOANav = () => {
     // FIX: Access state via oaReplyStore.getState()
-    const currentStep = oaReplyStore.getState().currentStep;
+    const state = oaReplyStore.getState();
+    const currentStep = state.currentStep;
+    // If currentStep is 'history', no nav item should be highlighted, or maybe we treat it differently.
+    // For now, let's just check if currentStep matches any nav item ID.
+    
+    const isHistoryView = currentStep === 'history';
+    const historyBtnText = isHistoryView ? '返回分析' : '历史记录';
+    const historyBtnIcon = isHistoryView ? 'arrow_back' : 'history';
+
     return `
         <nav class="h-full bg-gray-50 dark:bg-gray-800 w-72 p-4 flex flex-col border-r border-gray-200 dark:border-gray-700 shrink-0">
             <ul class="flex flex-col gap-2">
@@ -45,11 +53,17 @@ const renderOANav = () => {
                     </li>
                 `).join('')}
             </ul>
-            <div class="mt-auto pt-4 border-t border-gray-200 dark:border-gray-700">
-                 <button id="restart-oa" class="w-full flex items-center justify-center gap-2 p-3 rounded-full bg-red-600 text-white font-bold hover:bg-red-700 transition-colors">
-                    <span class="material-symbols-outlined">refresh</span>
-                    重新开始
+            <div class="mt-auto space-y-4">
+                <button id="view-oa-history-btn" class="w-full bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 font-bold p-3 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors flex items-center justify-center gap-3">
+                    <span class="material-symbols-outlined">${historyBtnIcon}</span>
+                    ${historyBtnText}
                 </button>
+                <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+                     <button id="restart-oa" class="w-full flex items-center justify-center gap-2 p-3 rounded-full bg-red-600 text-white font-bold hover:bg-red-700 transition-colors">
+                        <span class="material-symbols-outlined">refresh</span>
+                        重新开始
+                    </button>
+                </div>
             </div>
         </nav>
     `;
@@ -77,13 +91,18 @@ const renderDistinguishingFeaturesContent = () => {
     // FIX: Access state via oaReplyStore.getState()
     const state = oaReplyStore.getState();
 
-    if (state.isLoading && state.loadingStep === 'distinguishing-features') {
+    if (state.isLoading) {
+        // If loading, check if it's specifically for feature analysis or the one-click process
+        const loadingMessage = state.loadingStep === 'distinguishing-features' 
+            ? '正在分析中，请稍候...' 
+            : (state.loadingStep || '正在处理...');
+            
         return `
          <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
             <div class="flex flex-col items-center justify-center h-64 bg-white dark:bg-gray-800 rounded-lg">
                 <div class="animate-spin rounded-full h-16 w-16 border-t-2 border-b-2 border-blue-500"></div>
-                <p class="mt-4 text-gray-700 dark:text-gray-300">正在分析中，请稍候...</p>
+                <p class="mt-4 text-gray-700 dark:text-gray-300">${loadingMessage}</p>
             </div>
          </div>
         `;
@@ -169,9 +188,13 @@ const renderDistinguishingFeaturesContent = () => {
             ${renderFeatureList(claimFeatures, 'A. 现有权要中已被审查员指出的区别特征')}
             ${renderFeatureList(specificationFeatures, 'B. 说明书记载但未写入权利要求的技术特征')}
         </div>
-        <div class="mt-8 text-center">
-            <button id="confirm-features-btn" class="bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
+        <div class="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+            <button id="confirm-features-btn" class="w-full sm:w-auto bg-blue-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-blue-700 transition-colors">
                 确认选择并进入下一步
+            </button>
+            <button id="one-click-generate-btn" class="w-full sm:w-auto bg-purple-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-purple-700 transition-colors flex items-center justify-center gap-2">
+                <span class="material-symbols-outlined">auto_fix_high</span>
+                一键生成最终答复
             </button>
         </div>
      </div>
@@ -560,65 +583,90 @@ const attachOAContentEventListeners = () => {
     }
     
     if (state.currentStep === 'distinguishing-features') {
+        // Helper function to save selected features from DOM to State
+        const saveSelectedFeatures = () => {
+            const selectedCheckboxes = document.querySelectorAll('#features-list input[type="checkbox"]:checked');
+            const newSelectedFeatures = Array.from(selectedCheckboxes).map(cb => {
+                const index = parseInt((cb as HTMLElement).id.split('-')[1], 10);
+                return oaReplyStore.getState().distinguishingFeatures[index];
+            });
+
+            const oldSelectionJSON = JSON.stringify(oaReplyStore.getState().selectedFeatures.map(f => f.feature).sort());
+            const newSelectionJSON = JSON.stringify(newSelectedFeatures.map(f => f.feature).sort());
+            const selectionChanged = oldSelectionJSON !== newSelectionJSON;
+
+            const newState: any = { selectedFeatures: newSelectedFeatures };
+
+            if (selectionChanged) {
+                newState.amendmentExplanationText = '';
+                newState.technicalProblemFeaturesSummary = '';
+                newState.technicalProblemStatement = '';
+                newState.technicalProblemEffectsAnalysis = '';
+                newState.nonObviousnessAnalysisText = '';
+                newState.finalResponseText = '';
+            }
+            
+            oaReplyStore.setState(newState);
+            return newSelectedFeatures;
+        };
+
         const confirmBtn = document.getElementById('confirm-features-btn');
         if (confirmBtn) {
             confirmBtn.addEventListener('click', () => {
-                const selectedCheckboxes = document.querySelectorAll('#features-list input[type="checkbox"]:checked');
-                const newSelectedFeatures = Array.from(selectedCheckboxes).map(cb => {
-                    const index = parseInt((cb as HTMLElement).id.split('-')[1], 10);
-                    // FIX: Access state via oaReplyStore.getState()
-                    return oaReplyStore.getState().distinguishingFeatures[index];
-                });
-
-                if (newSelectedFeatures.length === 0) {
+                const features = saveSelectedFeatures();
+                if (features.length === 0) {
                     showToast('请至少选择一个区别技术特征。');
                     return;
                 }
-                
-                // FIX: Access state via oaReplyStore.getState()
-                const oldSelectionJSON = JSON.stringify(oaReplyStore.getState().selectedFeatures.map(f => f.feature).sort());
-                const newSelectionJSON = JSON.stringify(newSelectedFeatures.map(f => f.feature).sort());
-                const selectionChanged = oldSelectionJSON !== newSelectionJSON;
 
-                const newState: any = { selectedFeatures: newSelectedFeatures };
-
-                if (selectionChanged) {
-                    // If selection changed, invalidate all subsequent data
-                    newState.amendmentExplanationText = '';
-                    newState.technicalProblemFeaturesSummary = '';
-                    newState.technicalProblemStatement = '';
-                    newState.technicalProblemEffectsAnalysis = '';
-                    newState.nonObviousnessAnalysisText = '';
-                    newState.finalResponseText = '';
-                }
-                
-                // FIX: Update state via oaReplyStore.setState()
-                oaReplyStore.setState(newState);
-
-                // FIX: Access state via oaReplyStore.getState()
                 if (!oaReplyStore.getState().amendmentExplanationText) {
                     setTimeout(async () => {
-                        // FIX: Update state via oaReplyStore.setState()
                         oaReplyStore.setState({ isLoading: true, loadingStep: 'amendment-explanation', currentStep: 'amendment-explanation' });
                         updateOAReplyView();
                         try {
                             await generateAmendmentExplanation();
                         } catch (error) {
-                            // The error is already handled and a toast is shown by the feature function.
-                            // We just need to prevent the step from reverting.
-                            // The 'finally' block will handle resetting the loading state.
                             console.error("Failed to generate amendment explanation:", error);
                         } finally {
-                            // FIX: Update state via oaReplyStore.setState()
                             oaReplyStore.setState({ isLoading: false, loadingStep: null });
                             updateOAReplyView();
                         }
                     }, 0);
                 } else {
-                    // FIX: Update state via oaReplyStore.setState()
                     oaReplyStore.setState({ currentStep: 'amendment-explanation' });
                     updateOAReplyView();
                 }
+            });
+        }
+
+        const oneClickBtn = document.getElementById('one-click-generate-btn');
+        if (oneClickBtn) {
+            oneClickBtn.addEventListener('click', () => {
+                const features = saveSelectedFeatures();
+                if (features.length === 0) {
+                    showToast('请至少选择一个区别技术特征。');
+                    return;
+                }
+
+                // Start the chain
+                setTimeout(async () => {
+                    // Trigger loading UI immediately
+                    oaReplyStore.setState({ isLoading: true, loadingStep: '正在启动一键生成...' });
+                    updateOAReplyView();
+
+                    try {
+                        await handleOneClickGeneration();
+                        // Upon success, move to final step
+                        oaReplyStore.setState({ currentStep: 'final-response', isLoading: false, loadingStep: null });
+                        updateOAReplyView();
+                        showToast('一键生成完成！');
+                    } catch (error) {
+                        console.error("One-click generation failed:", error);
+                        oaReplyStore.setState({ isLoading: false, loadingStep: null });
+                        updateOAReplyView();
+                        showToast(`生成中断: ${(error as Error).message}`, 5000);
+                    }
+                }, 0);
             });
         }
     }
@@ -861,6 +909,7 @@ export const renderOaReplyPage = (appContainer: HTMLElement) => {
     const clickHandler = (e: Event) => {
         const target = e.target as HTMLElement;
 
+        // Nav Items
         const navLink = target.closest('nav a[data-step]');
         if (navLink) {
             e.preventDefault();
@@ -872,6 +921,22 @@ export const renderOaReplyPage = (appContainer: HTMLElement) => {
                     oaReplyStore.setState({ selectedHistoryId: null }); 
                 }
                 oaReplyStore.setState({ currentStep: step });
+                updateOAReplyView();
+            }
+            return;
+        }
+
+        // History Button (Bottom Sidebar)
+        const historyBtn = target.closest('#view-oa-history-btn');
+        if (historyBtn) {
+            e.preventDefault();
+            const state = oaReplyStore.getState();
+            if (state.currentStep !== 'history') {
+                oaReplyStore.setState({ currentStep: 'history', selectedHistoryId: null });
+                updateOAReplyView();
+            } else {
+                // Toggle back to upload files if already on history
+                oaReplyStore.setState({ currentStep: 'upload-files' });
                 updateOAReplyView();
             }
             return;
