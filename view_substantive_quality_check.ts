@@ -1,7 +1,10 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
+import * as docx from 'docx';
+import saveAs from 'file-saver';
 import { renderSettingsDropdown, showToast, createFileUploadInput } from './shared_ui.ts';
 import {
     // FIX: Renamed import from 'state' to 'substantiveCheckStore' to match the exported member.
@@ -33,6 +36,80 @@ function isCheckResultValid(data: unknown): data is SubstantiveCheckResult {
     }
     return true;
 }
+
+// --- EXPORT FUNCTION ---
+const handleExportWord = (checkResult: SubstantiveCheckResult) => {
+    try {
+        const doc = new docx.Document({
+            sections: [{
+                properties: {},
+                children: [
+                    new docx.Paragraph({
+                        text: "实质质检报告 (公开不充分)",
+                        heading: docx.HeadingLevel.TITLE,
+                        alignment: docx.AlignmentType.CENTER,
+                        spacing: { after: 400 }
+                    }),
+                    ...checkResult.issues.flatMap((issue, index) => [
+                        new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: `${index + 1}. [${issue.issueCategory}]`,
+                                    bold: true,
+                                    size: 28 // 14pt
+                                })
+                            ],
+                            spacing: { before: 300, after: 150 }
+                        }),
+                        new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: "问题分析:",
+                                    bold: true,
+                                    size: 24 // 12pt
+                                })
+                            ],
+                            spacing: { after: 100 }
+                        }),
+                        new docx.Paragraph({
+                            text: issue.reasoning,
+                            spacing: { after: 200 }
+                        }),
+                        new docx.Paragraph({
+                            children: [
+                                new docx.TextRun({
+                                    text: "修改建议:",
+                                    bold: true,
+                                    size: 24, // 12pt
+                                    color: "2E7D32" // Green color
+                                })
+                            ],
+                            spacing: { after: 100 }
+                        }),
+                        new docx.Paragraph({
+                            text: issue.suggestion,
+                            spacing: { after: 400 }
+                        }),
+                        new docx.Paragraph({ // Separator
+                            text: "",
+                            border: {
+                                bottom: { color: "E0E0E0", space: 1, style: docx.BorderStyle.SINGLE, size: 6 }
+                            }
+                        })
+                    ])
+                ],
+            }],
+        });
+
+        docx.Packer.toBlob(doc).then(blob => {
+            saveAs(blob, `实质质检报告_${new Date().toISOString().split('T')[0]}.docx`);
+            showToast('报告已导出！');
+        });
+    } catch (error) {
+        console.error("Export failed:", error);
+        showToast('导出失败，请重试。');
+    }
+};
 
 
 // --- RENDER FUNCTIONS ---
@@ -161,6 +238,15 @@ const renderResults = (checkResult: unknown, totalCost: number) => {
                     </div>
                  `}
             </div>
+
+            ${issues.length > 0 ? `
+            <div class="mt-8 text-center">
+                <button id="export-substantive-check-word-btn" class="bg-green-600 text-white font-bold py-3 px-8 rounded-lg hover:bg-green-700 transition-colors flex items-center gap-2 mx-auto">
+                    <span class="material-symbols-outlined">download</span>
+                    导出质检报告 (Word)
+                </button>
+            </div>
+            ` : ''}
         </div>
     `;
 };
@@ -430,6 +516,27 @@ const attachEventListeners = () => {
             // FIX: Update state via substantiveCheckStore.setState()
             substantiveCheckStore.setState({ selectedHistoryId: null, viewMode: 'historyList' });
             reRenderContent();
+            return;
+        }
+
+        const exportBtn = target.closest('#export-substantive-check-word-btn');
+        if (exportBtn) {
+            let resultToExport: SubstantiveCheckResult | null = null;
+
+            if (state.viewMode === 'main') {
+                // Safe cast because we check for checkResult validity before rendering the button
+                resultToExport = state.checkResult as SubstantiveCheckResult;
+            } else if (state.viewMode === 'historyDetail' && state.selectedHistoryId) {
+                const history = substantiveCheckHistoryDb.getHistory();
+                const entry = history.find(item => item.id === state.selectedHistoryId);
+                resultToExport = entry?.checkResult || null;
+            }
+
+            if (resultToExport) {
+                handleExportWord(resultToExport);
+            } else {
+                showToast('无法导出：未找到质检结果。');
+            }
             return;
         }
     };
