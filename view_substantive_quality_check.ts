@@ -37,6 +37,29 @@ function isCheckResultValid(data: unknown): data is SubstantiveCheckResult {
     return true;
 }
 
+// --- HELPER FUNCTIONS ---
+/**
+ * Formats text to ensure numbered lists are displayed as separate paragraphs.
+ * Detects patterns like "1.", "2.", "(1)", "(2)" and inserts newlines before them
+ * if they are embedded in a block of text.
+ */
+const formatTextForDisplay = (text: string) => {
+    if (!text) return '无内容';
+    let formatted = text;
+    
+    // Insert double newline before numbered lists (e.g., "1.", "2.") that are preceded by punctuation or whitespace
+    // This handles cases where the AI returns a single block like "1. Issue A. 2. Issue B."
+    formatted = formatted.replace(/([。；;!?]|\s)\s*(\d+\.)/g, '$1\n\n$2');
+    
+    // Insert double newline before parenthesized numbers (e.g., "(1)", "(2)")
+    formatted = formatted.replace(/([。；;!?]|\s)\s*(\(\d+\))/g, '$1\n\n$2');
+    
+    // Insert double newline before circled numbers
+    formatted = formatted.replace(/([。；;!?]|\s)\s*([①-⑩])/g, '$1\n\n$2');
+
+    return formatted;
+};
+
 // --- EXPORT FUNCTION ---
 const handleExportWord = (checkResult: SubstantiveCheckResult) => {
     try {
@@ -220,9 +243,9 @@ const renderResults = (checkResult: unknown, totalCost: number) => {
                                                     ${categoryIssues.length > 1 ? `<span class="text-lg font-bold mr-2">${index + 1}.</span>` : ''}
                                                     <span>问题分析:</span>
                                                 </h5>
-                                                <p class="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap">${item.reasoning}</p>
+                                                <p class="text-sm text-gray-600 dark:text-gray-400 whitespace-pre-wrap leading-relaxed">${formatTextForDisplay(item.reasoning)}</p>
                                                 <h5 class="font-semibold text-green-700 dark:text-green-400 mb-1 mt-3">修改建议:</h5>
-                                                <p class="text-sm text-green-600 dark:text-green-300 whitespace-pre-wrap">${item.suggestion}</p>
+                                                <p class="text-sm text-green-600 dark:text-green-300 whitespace-pre-wrap leading-relaxed">${formatTextForDisplay(item.suggestion)}</p>
                                             </div>
                                         `).join('<hr class="my-6 border-gray-200 dark:border-gray-600">')}
                                     </div>
