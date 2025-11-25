@@ -40,22 +40,31 @@ function isCheckResultValid(data: unknown): data is SubstantiveCheckResult {
 // --- HELPER FUNCTIONS ---
 /**
  * Formats text to ensure numbered lists are displayed as separate paragraphs.
- * Detects patterns like "1.", "2.", "(1)", "(2)" and inserts newlines before them
+ * Detects patterns like "1.", "2.", "1、", "(1)", "(2)" and inserts newlines before them
  * if they are embedded in a block of text.
  */
 const formatTextForDisplay = (text: string) => {
     if (!text) return '无内容';
     let formatted = text;
     
-    // Insert double newline before numbered lists (e.g., "1.", "2.") that are preceded by punctuation or whitespace
-    // This handles cases where the AI returns a single block like "1. Issue A. 2. Issue B."
-    formatted = formatted.replace(/([。；;!?]|\s)\s*(\d+\.)/g, '$1\n\n$2');
+    // Regex strategy:
+    // Match a boundary (punctuation, whitespace, or start of line) followed by a list marker.
+    // We insert double newlines to force paragraph breaks in whitespace-pre-wrap containers.
     
-    // Insert double newline before parenthesized numbers (e.g., "(1)", "(2)")
-    formatted = formatted.replace(/([。；;!?]|\s)\s*(\(\d+\))/g, '$1\n\n$2');
+    // 1. Match "1.", "2." etc. (Negative lookahead (?!\d) avoids matching floats like 1.5)
+    formatted = formatted.replace(/([。；;!?）\)]|\s|^)\s*(\d+\.(?!\d))/g, '$1\n\n$2');
     
-    // Insert double newline before circled numbers
-    formatted = formatted.replace(/([。；;!?]|\s)\s*([①-⑩])/g, '$1\n\n$2');
+    // 2. Match "1、", "2、" etc.
+    formatted = formatted.replace(/([。；;!?）\)]|\s|^)\s*(\d+、)/g, '$1\n\n$2');
+    
+    // 3. Match "(1)", "（1）" etc.
+    formatted = formatted.replace(/([。；;!?）\)]|\s|^)\s*([\(（]\d+[\)）])/g, '$1\n\n$2');
+    
+    // 4. Match circled numbers ①-⑩
+    formatted = formatted.replace(/([。；;!?）\)]|\s|^)\s*([①-⑩])/g, '$1\n\n$2');
+
+    // Clean up: remove leading newlines and reduce multiple newlines to max 2
+    formatted = formatted.replace(/^\n+/, '').replace(/\n{3,}/g, '\n\n');
 
     return formatted;
 };
