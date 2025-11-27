@@ -1,9 +1,10 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
 import { priorityReviewHistoryDb } from './shared_formal_check_db.ts';
-import { showToast, createFileUploadInput, renderSettingsDropdown } from './shared_ui.ts';
+import { showToast, createFileUploadInput, renderSettingsDropdown, renderModelSwitchButton, setupModelSwitchLogic } from './shared_ui.ts';
 import { 
     priorityReviewStore,
     handleStartPriorityReview,
@@ -423,7 +424,10 @@ export const renderPriorityReviewMaterialsPage = (appContainer: HTMLElement) => 
                     </button>
                     <h2 class="text-2xl font-bold">优审材料制作</h2>
                 </div>
-                ${renderSettingsDropdown()}
+                <div class="flex items-center gap-4">
+                    ${renderModelSwitchButton()}
+                    ${renderSettingsDropdown()}
+                </div>
             </header>
             <div class="flex flex-grow overflow-hidden">
                 ${renderSidebar()}
@@ -433,5 +437,6 @@ export const renderPriorityReviewMaterialsPage = (appContainer: HTMLElement) => 
             </div>
         </div>`;
     
+    setupModelSwitchLogic();
     return attachEventListeners();
 };

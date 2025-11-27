@@ -1,10 +1,11 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
 import { GoogleGenAI, Type } from "@google/genai";
 import { showToast } from './shared_ui.ts';
-import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { generateContentWithRetry, getAi, getActiveModel } from './shared_api.ts';
 import { substantiveCheckHistoryDb } from './shared_formal_check_db.ts';
 import { createStore } from './shared_store.ts';
 
@@ -151,7 +152,7 @@ export const handleStartSubstantiveCheck = async () => {
         const contents = { parts: [{ text: prompt }, { text: `\n\n--- 待检申请文件 (${state.files.application.name}) ---\n` }, applicationPart] };
         
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: contents,
             config: { responseMimeType: "application/json", responseSchema: schema },
         });

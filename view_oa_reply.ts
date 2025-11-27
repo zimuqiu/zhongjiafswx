@@ -1,10 +1,11 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
 import * as docx from 'docx';
 import saveAs from 'file-saver';
-import { showToast, createFileUploadInput, renderSettingsDropdown } from './shared_ui.ts';
+import { showToast, createFileUploadInput, renderSettingsDropdown, renderModelSwitchButton, setupModelSwitchLogic } from './shared_ui.ts';
 import {
     // FIX: Changed import from 'oaReplyState' to 'oaReplyStore' as per the exported member name.
     oaReplyStore,
@@ -892,7 +893,10 @@ export const renderOaReplyPage = (appContainer: HTMLElement) => {
                     </button>
                     <h2 class="text-2xl font-bold">OA答复</h2>
                 </div>
-                ${renderSettingsDropdown()}
+                <div class="flex items-center gap-4">
+                    ${renderModelSwitchButton()}
+                    ${renderSettingsDropdown()}
+                </div>
             </header>
             <div class="flex flex-grow overflow-hidden">
                 ${renderOANav()}
@@ -903,6 +907,9 @@ export const renderOaReplyPage = (appContainer: HTMLElement) => {
         </div>
     `;
     
+    // Setup model switch logic
+    setupModelSwitchLogic();
+
     const pageElement = document.getElementById('oa-reply-page');
     if (!pageElement) return () => {};
 

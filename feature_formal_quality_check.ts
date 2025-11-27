@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,7 +7,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import * as pdfjsLib from 'pdfjs-dist';
 import { formalCheckHistoryDb } from './shared_formal_check_db.ts';
 import { showToast } from './shared_ui.ts';
-import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { generateContentWithRetry, getAi, getActiveModel } from './shared_api.ts';
 import { createStore } from './shared_store.ts';
 
 // Set up PDF.js worker to run in the background
@@ -196,9 +197,9 @@ const extractSectionsFromPdfWithVision = async (file: File, onProgress: (message
     -   直接输出内容，不要添加“以下是识别结果”等引导语。
 `;
 
-        // Call Gemini 3 Pro for this chunk
+        // Call Gemini for this chunk using dynamic model
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: {
                 parts: [{ text: prompt }, ...imageParts]
             }
@@ -323,6 +324,7 @@ export const handleStartFormalCheck = async () => {
         const commonOverallRules = `
 - 检查是否叠字，如果有叠字，判断语句是否通顺（例如：的的）
 - 检查是否同时出现两个标点（例如：。。或者，，或者，。）
+- 检查是否存在错字、错词
 - 每句句子的句末需要有标点
 - **忽略换行处的空格问题**：文本已转换为Markdown格式，请忽略Markdown语法中的标准换行和段落间距。
 `;
@@ -411,7 +413,7 @@ ${commonOverallRules}
             const contents = { parts: [{ text: prompt }, { text: `# 待检章节文本 (Markdown)\n\n${sectionText}${additionalContext}` }] };
 
             return generateContentWithRetry({
-                model: 'gemini-3-pro-preview',
+                model: getActiveModel(),
                 contents: contents,
                 config: { responseMimeType: "application/json", responseSchema: issueSchema },
             });

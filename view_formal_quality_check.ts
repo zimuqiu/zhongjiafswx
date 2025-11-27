@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import { formalCheckHistoryDb } from './shared_formal_check_db.ts';
-import { showToast, createFileUploadInput, renderSettingsDropdown } from './shared_ui.ts';
+import { showToast, createFileUploadInput, renderSettingsDropdown, renderModelSwitchButton, setupModelSwitchLogic } from './shared_ui.ts';
 import { 
     formalCheckStore,
     handleStartFormalCheck 
@@ -395,7 +395,10 @@ export const renderFormalQualityCheckPage = (appContainer: HTMLElement) => {
                     </button>
                     <h2 class="text-2xl font-bold">形式质检</h2>
                 </div>
-                ${renderSettingsDropdown()}
+                <div class="flex items-center gap-4">
+                    ${renderModelSwitchButton()}
+                    ${renderSettingsDropdown()}
+                </div>
             </header>
             <div class="flex flex-grow overflow-hidden">
                 ${renderFormalCheckSidebar()}
@@ -404,6 +407,8 @@ export const renderFormalQualityCheckPage = (appContainer: HTMLElement) => {
                 </main>
             </div>
         </div>`;
+    
+    setupModelSwitchLogic();
     // FIX: Return the unsubscribe function from attachFormalCheckEventListeners.
     return attachFormalCheckEventListeners();
 };

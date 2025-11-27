@@ -1,8 +1,10 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
 import { getCurrentUserProfile } from './shared_user.ts';
+import { getActiveModel, getModelDisplayName, toggleModel } from './shared_api.ts';
 
 // --- UI COMPONENTS ---
 let currentToast: HTMLElement | null = null;
@@ -11,7 +13,7 @@ export const showToast = (message, duration = 3000) => {
         currentToast.remove();
     }
     const toast = document.createElement('div');
-    toast.className = 'fixed bottom-5 left-1/2 -translate-x-1/2 translate-y-20 bg-gray-700 text-white py-3 px-6 rounded-full text-sm z-50 opacity-0 transition-all duration-300';
+    toast.className = 'fixed bottom-5 left-1/2 -translate-x-1/2 translate-y-20 bg-gray-700 text-white py-3 px-6 rounded-full text-sm z-50 opacity-0 transition-all duration-300 shadow-lg border border-gray-600';
     toast.textContent = message;
     document.getElementById('app')?.appendChild(toast);
     currentToast = toast;
@@ -30,6 +32,28 @@ export const showToast = (message, duration = 3000) => {
 };
 
 // FIX: Removed promptForApiKey function as per coding guidelines. API key must come from process.env.API_KEY.
+
+export const renderModelSwitchButton = () => {
+    return `
+        <button class="model-switch-btn flex items-center gap-2 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-sm font-medium hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors border border-blue-200 dark:border-blue-800" title="点击切换模型">
+            <span class="material-symbols-outlined text-lg">psychology</span>
+            <span>${getModelDisplayName(getActiveModel())}</span>
+        </button>
+    `;
+};
+
+export const setupModelSwitchLogic = () => {
+    const btns = document.querySelectorAll('.model-switch-btn');
+    btns.forEach(btn => {
+        // Prevent multiple listeners if called multiple times (though simple replacement handles this usually)
+        const newBtn = btn.cloneNode(true);
+        btn.parentNode?.replaceChild(newBtn, btn);
+        
+        newBtn.addEventListener('click', () => {
+            toggleModel();
+        });
+    });
+};
 
 
 export const renderSettingsDropdown = () => {

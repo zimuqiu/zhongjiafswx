@@ -1,3 +1,4 @@
+
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -6,6 +7,41 @@
 import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 // FIX: Removed unused import for promptForApiKey.
 import { showToast } from './shared_ui.ts';
+
+// --- MODEL CONFIGURATION ---
+export const MODELS = {
+    SMART: 'gemini-3-pro-preview',
+    FAST: 'gemini-2.5-flash' // Using Flash as the robust fallback for 2.5 series
+};
+
+let currentModelId = MODELS.SMART;
+
+export const getActiveModel = () => currentModelId;
+
+export const setActiveModel = (modelId: string) => {
+    currentModelId = modelId;
+    updateModelButtonUI();
+};
+
+export const toggleModel = () => {
+    currentModelId = currentModelId === MODELS.SMART ? MODELS.FAST : MODELS.SMART;
+    updateModelButtonUI();
+    showToast(`已切换至模型: ${getModelDisplayName(currentModelId)}`);
+    return currentModelId;
+};
+
+export const getModelDisplayName = (modelId: string) => {
+    return modelId === MODELS.SMART ? 'Gemini 3.0 Pro' : 'Gemini 2.5 Pro';
+};
+
+// Helper to update UI across the app without reloading
+const updateModelButtonUI = () => {
+    const btns = document.querySelectorAll('.model-switch-btn');
+    btns.forEach(btn => {
+        const span = btn.querySelector('span:last-child');
+        if (span) span.textContent = getModelDisplayName(currentModelId);
+    });
+};
 
 // --- GEMINI API PRICING ---
 const GEMINI_PRO_PRICING = {
@@ -67,10 +103,13 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
 
     for (let i = 0; i < retries; i++) {
         try {
-            const inputChars = getInputChars(params.contents);
+            // FORCE override the model with the currently active global model
+            const currentParams = { ...params, model: getActiveModel() };
+            
+            const inputChars = getInputChars(currentParams.contents);
             
             const consumeStream = async (): Promise<{ text: string }> => {
-                const stream = await aiClient.models.generateContentStream(params);
+                const stream = await aiClient.models.generateContentStream(currentParams);
                 let aggregatedText = '';
                 for await (const chunk of stream) {
                     aggregatedText += (chunk.text || '');
@@ -92,15 +131,26 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
 
         } catch (error) {
             lastError = error as Error;
-            console.error(`Attempt ${i + 1} of ${retries} failed:`, error);
             const errorMessage = lastError.message.toLowerCase();
+            console.error(`Attempt ${i + 1} of ${retries} failed on model ${getActiveModel()}:`, error);
 
             // If the error is an invalid API key, clear it and fail immediately.
             if (errorMessage.includes('api key not valid')) {
-                // FIX: Removed sessionStorage logic as API key comes from the environment.
-                ai = null; // Force re-initialization on next call.
-                // FIX: Updated error message to reflect that the key comes from the environment.
+                ai = null; 
                 throw new Error('API密钥无效。请检查您的环境配置。');
+            }
+
+            // --- AUTO SWITCHING LOGIC ---
+            // Check for Resource Exhausted (429) or Quota related errors
+            if (errorMessage.includes('429') || errorMessage.includes('resource exhausted') || errorMessage.includes('quota')) {
+                if (currentModelId === MODELS.SMART) {
+                    console.warn("Rate limit hit on Smart model. Switching to Fast model.");
+                    setActiveModel(MODELS.FAST);
+                    showToast('检测到3.0模型限流，已自动切换至Gemini 2.5继续任务。', 5000);
+                    // Reset retries for the new model to ensure it gets a fair chance
+                    i = -1; 
+                    continue; 
+                }
             }
             
             if (i < retries - 1) {
@@ -108,7 +158,7 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
                 const delay = initialDelay * Math.pow(2, i) + jitter;
                 const delayInSeconds = (delay / 1000).toFixed(1);
 
-                showToast(`AI服务连接失败，${delayInSeconds}秒后重试... (第 ${i + 2}/${retries} 次)`, Math.round(delay));
+                showToast(`请求失败 (${getModelDisplayName(currentModelId)})，${delayInSeconds}秒后重试... (第 ${i + 2}/${retries} 次)`, Math.round(delay));
                 await new Promise(res => setTimeout(res, delay));
             } else {
                 console.error("All retry attempts failed.");

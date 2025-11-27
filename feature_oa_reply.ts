@@ -3,7 +3,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
 */
-import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { generateContentWithRetry, getAi, getActiveModel } from './shared_api.ts';
 import { showToast } from './shared_ui.ts';
 import { createStore } from './shared_store.ts';
 
@@ -227,7 +227,7 @@ justification: (string)
         const contents = { parts: [{ text: prompt }, ...fileParts] };
 
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: contents,
             config: {
                 responseMimeType: "application/json",
@@ -347,7 +347,7 @@ export const generateAmendmentExplanation = async () => {
         const contents = { parts: [{ text: prompt }, {text: `selectedFeaturesJSON:\n${selectedFeaturesJSON}`}, applicationFilePart] };
         
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: contents,
         });
         
@@ -447,7 +447,7 @@ ${selectedFeaturesText}
         };
 
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: { parts: [{ text: prompt }] },
             config: {
                 responseMimeType: "application/json",
@@ -551,7 +551,6 @@ ${state.technicalProblemEffectsAnalysis}
 18. **最高优先级 - 分析**：非显而易见性分析部分，对本申请的分析过程严禁引用本申请说明书中的内容，对本申请的分析过程的基础是权利要求1的内容，只可以依据有益效果分析部分的内容来论述。
 
 #**参考知识**
-
 参照下述示例分析本发明对本领域的技术人员来说非显而易见的理由：
 
 判断要求保护的发明对本领域的技术人员来说是否显而易见
@@ -923,7 +922,7 @@ a1、“权利要求不符合《专利法》第22条第3款规定的创造性”
         const contents = { parts };
         
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: contents,
         });
         
@@ -985,7 +984,7 @@ ${state.nonObviousnessAnalysisText}
 `;
 
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: { parts: [{ text: assemblyPrompt }] },
         });
 

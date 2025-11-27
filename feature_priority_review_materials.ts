@@ -6,7 +6,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import * as pdfjsLib from 'pdfjs-dist';
 import { createStore } from './shared_store.ts';
-import { generateContentWithRetry, getAi } from './shared_api.ts';
+import { generateContentWithRetry, getAi, getActiveModel } from './shared_api.ts';
 import { showToast } from './shared_ui.ts';
 import { priorityReviewHistoryDb, PriorityReviewResultDB } from './shared_formal_check_db.ts';
 import { getPriorityReviewData, ReviewTableData } from './shared_priority_review_data.ts';
@@ -256,7 +256,7 @@ export const handleStartPriorityReview = async () => {
         ];
 
         const { response, cost } = await generateContentWithRetry({
-            model: 'gemini-3-pro-preview',
+            model: getActiveModel(),
             contents: { parts },
             config: { responseMimeType: "application/json" }
         });
