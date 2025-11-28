@@ -361,12 +361,22 @@ const renderHistoryListContent = (history) => {
             </div>
         `;
     }
+    
+    // Add search bar
+    const searchBar = `
+        <div class="mb-6 relative">
+            <span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">search</span>
+            <input type="text" id="oa-history-search" placeholder="搜索历史记录 (文件名、日期)..." class="w-full pl-10 pr-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all">
+        </div>
+    `;
+
     return `
         <div class="w-full max-w-4xl mx-auto">
             <h3 class="text-2xl font-bold mb-6">${title}</h3>
-            <div class="space-y-4">
+            ${searchBar}
+            <div class="space-y-4" id="oa-history-list">
                 ${history.map(entry => `
-                    <div class="bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                    <div class="history-entry bg-white dark:bg-gray-800 p-5 rounded-lg border border-gray-200 dark:border-gray-700 flex justify-between items-center transition-all">
                         <div>
                             <p class="font-semibold text-gray-800 dark:text-gray-200" title="${entry.files.application || '无申请文件'}">${entry.files.application || '未命名会话'}</p>
                             <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">${entry.date}</p>
@@ -376,6 +386,7 @@ const renderHistoryListContent = (history) => {
                         </button>
                     </div>
                 `).join('')}
+                <div id="oa-history-no-results" class="hidden text-center text-gray-500 dark:text-gray-400 py-4">无搜索结果</div>
             </div>
         </div>
     `;
@@ -878,6 +889,27 @@ const attachOAContentEventListeners = () => {
                 // FIX: Update state via oaReplyStore.setState()
                 oaReplyStore.setState({ selectedHistoryId: null });
                 updateOAReplyView();
+            });
+        }
+
+        // Add Search Functionality
+        const searchInput = document.getElementById('oa-history-search');
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                const term = (e.target as HTMLInputElement).value.toLowerCase();
+                const entries = document.querySelectorAll('.history-entry');
+                let hasVisible = false;
+                entries.forEach(entry => {
+                    const text = (entry as HTMLElement).innerText.toLowerCase();
+                    if (text.includes(term)) {
+                        (entry as HTMLElement).style.display = 'flex';
+                        hasVisible = true;
+                    } else {
+                        (entry as HTMLElement).style.display = 'none';
+                    }
+                });
+                const noResults = document.getElementById('oa-history-no-results');
+                if (noResults) noResults.classList.toggle('hidden', hasVisible);
             });
         }
     }

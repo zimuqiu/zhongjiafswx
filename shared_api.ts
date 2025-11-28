@@ -11,7 +11,7 @@ import { showToast } from './shared_ui.ts';
 // --- MODEL CONFIGURATION ---
 export const MODELS = {
     SMART: 'gemini-3-pro-preview',
-    FAST: 'gemini-2.5-flash' // Using Flash as the robust fallback for 2.5 series
+    FAST: 'gemini-2.5-pro' // Using Flash as the robust fallback for 2.5 series
 };
 
 let currentModelId = MODELS.SMART;
@@ -36,10 +36,25 @@ export const getModelDisplayName = (modelId: string) => {
 
 // Helper to update UI across the app without reloading
 const updateModelButtonUI = () => {
-    const btns = document.querySelectorAll('.model-switch-btn');
-    btns.forEach(btn => {
-        const span = btn.querySelector('span:last-child');
-        if (span) span.textContent = getModelDisplayName(currentModelId);
+    const wrappers = document.querySelectorAll('.model-switch-wrapper');
+    wrappers.forEach(wrapper => {
+        // Update trigger text
+        const nameSpan = wrapper.querySelector('.current-model-name');
+        if (nameSpan) nameSpan.textContent = getModelDisplayName(currentModelId);
+
+        // Update dropdown active state checkmarks
+        const options = wrapper.querySelectorAll('.model-option');
+        options.forEach(opt => {
+            const model = (opt as HTMLElement).dataset.model;
+            const checkmark = opt.querySelector('.checkmark');
+            if (checkmark) {
+                if (model === currentModelId) {
+                    checkmark.classList.remove('opacity-0');
+                } else {
+                    checkmark.classList.add('opacity-0');
+                }
+            }
+        });
     });
 };
 
@@ -57,8 +72,19 @@ const calculateCost = (inputChars: number, outputChars: number): number => {
 };
 
 
-// --- GEMINI API ---
+// --- GEMINI API & KEY ROTATION ---
+// Parse API keys from environment variable (comma-separated support)
+const API_KEYS = (process.env.API_KEY || '').split(',').map(k => k.trim()).filter(k => k);
+let currentKeyIndex = 0;
 let ai: GoogleGenAI | null = null;
+
+const rotateApiKey = () => {
+    if (API_KEYS.length <= 1) return false;
+    currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
+    ai = null; // Force re-initialization with new key
+    console.log(`Rotated to API Key index: ${currentKeyIndex}`);
+    return true;
+};
 
 export const getAi = async (): Promise<GoogleGenAI> => {
     if (ai) {
@@ -66,10 +92,15 @@ export const getAi = async (): Promise<GoogleGenAI> => {
     }
 
     try {
-        // FIX: Per coding guidelines, API key must be obtained from process.env.API_KEY.
-        const newAiInstance = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const currentKey = API_KEYS[currentKeyIndex];
+        if (!currentKey) {
+            throw new Error('No API Key found in environment variables.');
+        }
+        
+        // FIX: Per coding guidelines, API key must be obtained from process.env.API_KEY (parsed above).
+        const newAiInstance = new GoogleGenAI({ apiKey: currentKey });
         // Test with a simple request to validate the key early
-        await newAiInstance.models.generateContent({model: 'gemini-2.5-flash', contents: 'Hi'});
+        // await newAiInstance.models.generateContent({model: 'gemini-2.5-pro', contents: 'Hi'});
         ai = newAiInstance;
         return ai;
     } catch (error) {
@@ -77,7 +108,6 @@ export const getAi = async (): Promise<GoogleGenAI> => {
         console.error("Failed to initialize GoogleGenAI or invalid API key:", error);
         const errorMessage = (error as Error).message;
         if (errorMessage.includes('API key not valid')) {
-             // FIX: Updated error message to reflect that the key comes from the environment.
              showToast('提供的API密钥无效。');
         } else {
              showToast('AI服务初始化失败，请检查网络或配置。');
@@ -99,10 +129,14 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
     };
     
     // Ensure we have a valid AI client before starting retries.
-    const aiClient = await getAi();
+    // Note: getAi() might throw if no keys are valid initially.
+    await getAi();
 
     for (let i = 0; i < retries; i++) {
         try {
+            // Re-fetch AI client in case it was reset (rotated) in previous iteration
+            const aiClient = await getAi();
+            
             // FORCE override the model with the currently active global model
             const currentParams = { ...params, model: getActiveModel() };
             
@@ -132,7 +166,7 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
         } catch (error) {
             lastError = error as Error;
             const errorMessage = lastError.message.toLowerCase();
-            console.error(`Attempt ${i + 1} of ${retries} failed on model ${getActiveModel()}:`, error);
+            console.error(`Attempt ${i + 1} of ${retries} failed on model ${getActiveModel()} with Key [${currentKeyIndex}]:`, error);
 
             // If the error is an invalid API key, clear it and fail immediately.
             if (errorMessage.includes('api key not valid')) {
@@ -140,16 +174,23 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
                 throw new Error('API密钥无效。请检查您的环境配置。');
             }
 
-            // --- AUTO SWITCHING LOGIC ---
+            // --- AUTO KEY ROTATION LOGIC ---
             // Check for Resource Exhausted (429) or Quota related errors
             if (errorMessage.includes('429') || errorMessage.includes('resource exhausted') || errorMessage.includes('quota')) {
-                if (currentModelId === MODELS.SMART) {
-                    console.warn("Rate limit hit on Smart model. Switching to Fast model.");
-                    setActiveModel(MODELS.FAST);
-                    showToast('检测到3.0模型限流，已自动切换至Gemini 2.5继续任务。', 5000);
-                    // Reset retries for the new model to ensure it gets a fair chance
-                    i = -1; 
+                // Try rotating the key if multiple keys are available
+                const rotated = rotateApiKey();
+                if (rotated) {
+                    console.warn(`Rate limit hit. Rotated to Key Index: ${currentKeyIndex}`);
+                    showToast('检测到请求限制，正在切换备用API Key重试...', 3000);
+                    // Reset retries or just continue? 
+                    // To avoid infinite loops with many bad keys, we count this as a failure attempt but continue immediately.
+                    // Or we could be generous and decrement i to verify the new key fully.
+                    // Let's just continue loop, effectively treating rotation as one retry step.
+                    // But we add a small delay to be safe.
+                    await new Promise(res => setTimeout(res, 1000));
                     continue; 
+                } else {
+                    console.warn("Rate limit hit, but no other keys available to rotate.");
                 }
             }
             
@@ -158,7 +199,7 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
                 const delay = initialDelay * Math.pow(2, i) + jitter;
                 const delayInSeconds = (delay / 1000).toFixed(1);
 
-                showToast(`请求失败 (${getModelDisplayName(currentModelId)})，${delayInSeconds}秒后重试... (第 ${i + 2}/${retries} 次)`, Math.round(delay));
+                showToast(`请求失败，${delayInSeconds}秒后重试... (第 ${i + 2}/${retries} 次)`, Math.round(delay));
                 await new Promise(res => setTimeout(res, delay));
             } else {
                 console.error("All retry attempts failed.");

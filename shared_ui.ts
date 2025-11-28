@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 import { getCurrentUserProfile } from './shared_user.ts';
-import { getActiveModel, getModelDisplayName, toggleModel } from './shared_api.ts';
+import { getActiveModel, getModelDisplayName, setActiveModel, MODELS } from './shared_api.ts';
 
 // --- UI COMPONENTS ---
 let currentToast: HTMLElement | null = null;
@@ -34,25 +34,106 @@ export const showToast = (message, duration = 3000) => {
 // FIX: Removed promptForApiKey function as per coding guidelines. API key must come from process.env.API_KEY.
 
 export const renderModelSwitchButton = () => {
+    const currentId = getActiveModel();
+    const displayName = getModelDisplayName(currentId);
+    
     return `
-        <button class="model-switch-btn flex items-center gap-2 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-sm font-medium hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors border border-blue-200 dark:border-blue-800" title="点击切换模型">
-            <span class="material-symbols-outlined text-lg">psychology</span>
-            <span>${getModelDisplayName(getActiveModel())}</span>
-        </button>
+        <div class="relative group model-switch-wrapper z-30">
+            <button class="model-switch-trigger flex items-center gap-2 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg text-sm font-medium hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors border border-blue-200 dark:border-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500/50" title="切换AI模型">
+                <span class="material-symbols-outlined text-lg">psychology</span>
+                <span class="current-model-name">${displayName}</span>
+                <span class="material-symbols-outlined text-sm transition-transform duration-200" id="model-dropdown-arrow">expand_more</span>
+            </button>
+            <div class="model-switch-menu hidden absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 overflow-hidden transform origin-top-right transition-all duration-200">
+                <button data-model="${MODELS.SMART}" class="model-option w-full text-left px-4 py-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex justify-between items-center group/item transition-colors">
+                    <span>Gemini 3.0 Pro</span>
+                    <span class="material-symbols-outlined text-blue-600 dark:text-blue-400 checkmark ${currentId === MODELS.SMART ? '' : 'opacity-0'}">check</span>
+                </button>
+                <button data-model="${MODELS.FAST}" class="model-option w-full text-left px-4 py-3 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex justify-between items-center group/item transition-colors">
+                    <span>Gemini 2.5 Pro</span>
+                    <span class="material-symbols-outlined text-blue-600 dark:text-blue-400 checkmark ${currentId === MODELS.FAST ? '' : 'opacity-0'}">check</span>
+                </button>
+            </div>
+        </div>
     `;
 };
 
 export const setupModelSwitchLogic = () => {
-    const btns = document.querySelectorAll('.model-switch-btn');
-    btns.forEach(btn => {
-        // Prevent multiple listeners if called multiple times (though simple replacement handles this usually)
-        const newBtn = btn.cloneNode(true);
-        btn.parentNode?.replaceChild(newBtn, btn);
-        
-        newBtn.addEventListener('click', () => {
-            toggleModel();
+    // We attach listeners to the document to handle the dropdown behavior globally for any rendered instances
+    // Use a unique handler to prevent duplicate event listeners if called multiple times
+    
+    const wrapperSelector = '.model-switch-wrapper';
+    
+    // Close dropdown when clicking outside
+    const closeDropdowns = () => {
+        document.querySelectorAll(`${wrapperSelector} .model-switch-menu`).forEach(menu => {
+            menu.classList.add('hidden');
+        });
+        document.querySelectorAll(`${wrapperSelector} #model-dropdown-arrow`).forEach(arrow => {
+            arrow.classList.remove('rotate-180');
+        });
+    };
+
+    // Remove existing listeners if any (simple way is to clone body? No, too aggressive).
+    // Instead, we will rely on adding listeners to the specific elements freshly rendered.
+    // Since setupModelSwitchLogic is called after render, we target the new elements.
+
+    const wrappers = document.querySelectorAll(wrapperSelector);
+    
+    wrappers.forEach(wrapper => {
+        const trigger = wrapper.querySelector('.model-switch-trigger');
+        const menu = wrapper.querySelector('.model-switch-menu');
+        const arrow = wrapper.querySelector('#model-dropdown-arrow');
+        const options = wrapper.querySelectorAll('.model-option');
+
+        if (trigger && menu && arrow) {
+            trigger.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isHidden = menu.classList.contains('hidden');
+                // Close others first
+                closeDropdowns();
+                
+                if (isHidden) {
+                    menu.classList.remove('hidden');
+                    arrow.classList.add('rotate-180');
+                } else {
+                    menu.classList.add('hidden');
+                    arrow.classList.remove('rotate-180');
+                }
+            });
+        }
+
+        options.forEach(opt => {
+            opt.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const modelId = (opt as HTMLElement).dataset.model;
+                if (modelId) {
+                    setActiveModel(modelId);
+                    showToast(`已切换至模型: ${getModelDisplayName(modelId)}`);
+                }
+                closeDropdowns();
+            });
         });
     });
+
+    // One-time document click listener for outside clicks (check if already attached to avoid duplicates?)
+    // A simple way is to remove and re-add named function, but here we can just ensure
+    // we don't have multiple listeners doing the same thing. 
+    // Since this function might be called on page navigation, we should be careful.
+    // Ideally, we'd have a global init, but for now, we'll add a click listener to window 
+    // that closes menus if the click target isn't inside a wrapper.
+    
+    // To avoid accumulation, we can assign this function to a window property or just accept 
+    // that multiple listeners doing the same 'close all' is harmless but inefficient. 
+    // Optimization: Add a class to body to mark initialized.
+    if (!document.body.dataset.modelSwitchInitialized) {
+        document.addEventListener('click', (e) => {
+            if (!(e.target as HTMLElement).closest(wrapperSelector)) {
+                closeDropdowns();
+            }
+        });
+        document.body.dataset.modelSwitchInitialized = 'true';
+    }
 };
 
 
