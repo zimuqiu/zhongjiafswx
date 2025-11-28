@@ -14,6 +14,26 @@ export const MODELS = {
     FAST: 'gemini-2.5-pro' // Using Flash as the robust fallback for 2.5 series
 };
 
+// --- GEMINI API PRICING (CNY per 1000 characters) ---
+// Estimates based on ~1 Token = 4 Characters and Exchange Rate $1 USD ≈ ¥7.25 CNY
+const PRICING_RATES = {
+    [MODELS.SMART]: {
+        // High-end reasoning model (Reference: ~$3.50/1M input tokens, ~$10.50/1M output tokens)
+        INPUT: 0.0065, 
+        OUTPUT: 0.0190
+    },
+    [MODELS.FAST]: {
+        // Efficient/Standard model (Reference: ~$1.25/1M input tokens, ~$3.75/1M output tokens or lower for Flash)
+        // Setting significantly lower to reflect "Fast/Cost-effective" choice
+        INPUT: 0.0025,
+        OUTPUT: 0.0075
+    },
+    'default': {
+        INPUT: 0.0050,
+        OUTPUT: 0.0150
+    }
+};
+
 let currentModelId = MODELS.SMART;
 
 export const getActiveModel = () => currentModelId;
@@ -58,16 +78,10 @@ const updateModelButtonUI = () => {
     });
 };
 
-// --- GEMINI API PRICING ---
-const GEMINI_PRO_PRICING = {
-    // Prices in Yuan (¥) per 1,000 characters. Based on an estimation.
-    INPUT_PRICE_PER_1K_CHARS: 0.0125,
-    OUTPUT_PRICE_PER_1K_CHARS: 0.0250,
-};
-
-const calculateCost = (inputChars: number, outputChars: number): number => {
-    const inputCost = (inputChars / 1000) * GEMINI_PRO_PRICING.INPUT_PRICE_PER_1K_CHARS;
-    const outputCost = (outputChars / 1000) * GEMINI_PRO_PRICING.OUTPUT_PRICE_PER_1K_CHARS;
+const calculateCost = (modelId: string, inputChars: number, outputChars: number): number => {
+    const rates = PRICING_RATES[modelId] || PRICING_RATES['default'];
+    const inputCost = (inputChars / 1000) * rates.INPUT;
+    const outputCost = (outputChars / 1000) * rates.OUTPUT;
     return inputCost + outputCost;
 };
 
@@ -75,14 +89,24 @@ const calculateCost = (inputChars: number, outputChars: number): number => {
 // --- GEMINI API & KEY ROTATION ---
 // Parse API keys from environment variable (comma-separated support)
 const API_KEYS = (process.env.API_KEY || '').split(',').map(k => k.trim()).filter(k => k);
-let currentKeyIndex = 0;
+
+// Initialize with a random index to distribute load evenly from the start
+let currentKeyIndex = API_KEYS.length > 0 ? Math.floor(Math.random() * API_KEYS.length) : 0;
 let ai: GoogleGenAI | null = null;
 
-const rotateApiKey = () => {
+// Helper: Pick a random *different* key index for rotation on error
+const rotateApiKeyRandomly = () => {
     if (API_KEYS.length <= 1) return false;
-    currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
+    
+    let nextIndex = currentKeyIndex;
+    // Loop until we find a different index
+    while (nextIndex === currentKeyIndex) {
+        nextIndex = Math.floor(Math.random() * API_KEYS.length);
+    }
+    
+    currentKeyIndex = nextIndex;
     ai = null; // Force re-initialization with new key
-    console.log(`Rotated to API Key index: ${currentKeyIndex}`);
+    console.log(`Rate limit encountered. Rotated randomly to API Key index: ${currentKeyIndex}`);
     return true;
 };
 
@@ -99,8 +123,6 @@ export const getAi = async (): Promise<GoogleGenAI> => {
         
         // FIX: Per coding guidelines, API key must be obtained from process.env.API_KEY (parsed above).
         const newAiInstance = new GoogleGenAI({ apiKey: currentKey });
-        // Test with a simple request to validate the key early
-        // await newAiInstance.models.generateContent({model: 'gemini-2.5-pro', contents: 'Hi'});
         ai = newAiInstance;
         return ai;
     } catch (error) {
@@ -128,8 +150,15 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
         return 0;
     };
     
+    // STRATEGY: For every new high-level request, pick a random key from the pool.
+    // This ensures load balancing even without errors.
+    if (API_KEYS.length > 1) {
+        currentKeyIndex = Math.floor(Math.random() * API_KEYS.length);
+        ai = null; // Force getAi() to re-initialize with the new random key
+        // console.log(`Starting request with Random Key Index: ${currentKeyIndex}`);
+    }
+
     // Ensure we have a valid AI client before starting retries.
-    // Note: getAi() might throw if no keys are valid initially.
     await getAi();
 
     for (let i = 0; i < retries; i++) {
@@ -138,7 +167,8 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
             const aiClient = await getAi();
             
             // FORCE override the model with the currently active global model
-            const currentParams = { ...params, model: getActiveModel() };
+            const activeModel = getActiveModel();
+            const currentParams = { ...params, model: activeModel };
             
             const inputChars = getInputChars(currentParams.contents);
             
@@ -160,7 +190,7 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
             const response = await Promise.race([apiCallPromise, timeoutPromise]) as { text: string };
             
             const outputChars = response.text?.length || 0;
-            const cost = calculateCost(inputChars, outputChars);
+            const cost = calculateCost(activeModel, inputChars, outputChars);
             return { response, cost };
 
         } catch (error) {
@@ -177,16 +207,11 @@ export const generateContentWithRetry = async (params, retries = 5, initialDelay
             // --- AUTO KEY ROTATION LOGIC ---
             // Check for Resource Exhausted (429) or Quota related errors
             if (errorMessage.includes('429') || errorMessage.includes('resource exhausted') || errorMessage.includes('quota')) {
-                // Try rotating the key if multiple keys are available
-                const rotated = rotateApiKey();
+                // Try rotating the key randomly if multiple keys are available
+                const rotated = rotateApiKeyRandomly();
                 if (rotated) {
-                    console.warn(`Rate limit hit. Rotated to Key Index: ${currentKeyIndex}`);
                     showToast('检测到请求限制，正在切换备用API Key重试...', 3000);
-                    // Reset retries or just continue? 
-                    // To avoid infinite loops with many bad keys, we count this as a failure attempt but continue immediately.
-                    // Or we could be generous and decrement i to verify the new key fully.
-                    // Let's just continue loop, effectively treating rotation as one retry step.
-                    // But we add a small delay to be safe.
+                    // Add a small delay before immediate retry with new key
                     await new Promise(res => setTimeout(res, 1000));
                     continue; 
                 } else {
