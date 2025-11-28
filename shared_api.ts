@@ -16,21 +16,25 @@ export const MODELS = {
 
 // --- GEMINI API PRICING (CNY per 1000 characters) ---
 // Estimates based on ~1 Token = 4 Characters and Exchange Rate $1 USD ≈ ¥7.25 CNY
+// Calculation: (Price_USD / 1M Tokens) / 4 * 1000 * 7.25 = Price_USD * 0.0018125
 const PRICING_RATES = {
     [MODELS.SMART]: {
-        // High-end reasoning model (Reference: ~$3.50/1M input tokens, ~$10.50/1M output tokens)
-        INPUT: 0.0065, 
-        OUTPUT: 0.0190
+        // Gemini 3.0 Pro Preview Pricing (Standard Tier <= 200k context)
+        // Input: $2.00 / 1M tokens -> ¥0.003625 / 1k chars
+        // Output: $12.00 / 1M tokens -> ¥0.021750 / 1k chars
+        INPUT: 0.003625, 
+        OUTPUT: 0.02175
     },
     [MODELS.FAST]: {
-        // Efficient/Standard model (Reference: ~$1.25/1M input tokens, ~$3.75/1M output tokens or lower for Flash)
-        // Setting significantly lower to reflect "Fast/Cost-effective" choice
-        INPUT: 0.0025,
-        OUTPUT: 0.0075
+        // Gemini 2.5 Pro Pricing (Standard Tier <= 200k context)
+        // Input: $1.25 / 1M tokens -> ¥0.002266 / 1k chars
+        // Output: $10.00 / 1M tokens -> ¥0.018125 / 1k chars
+        INPUT: 0.002266,
+        OUTPUT: 0.018125
     },
     'default': {
-        INPUT: 0.0050,
-        OUTPUT: 0.0150
+        INPUT: 0.0030,
+        OUTPUT: 0.0200
     }
 };
 
