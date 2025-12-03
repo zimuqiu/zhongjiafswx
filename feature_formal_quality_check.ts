@@ -115,9 +115,9 @@ export const formalCheckCategories = [
 // --- LOGIC FUNCTIONS ---
 
 // Helper: Convert a PDF page to a Base64 Image
-// Optimized (Plan 3): Reduced scale and quality for faster processing
+// Optimized (Plan A): Increased scale and quality for better OCR accuracy
 const renderPageAsImage = async (page: any): Promise<string> => {
-    const scale = 1.5; // Optimized from 2.0 to 1.5
+    const scale = 2.5; // Increased from 1.5 to 2.5 for better detail (e.g., subscripts)
     const viewport = page.getViewport({ scale });
     
     const canvas = document.createElement('canvas');
@@ -132,8 +132,8 @@ const renderPageAsImage = async (page: any): Promise<string> => {
         viewport: viewport
     }).promise;
 
-    // Optimized from 0.8 to 0.6 to reduce payload size
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+    // Increased from 0.6 to 0.85 to reduce compression artifacts
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
     // Remove header to get pure base64
     return dataUrl.split(',')[1];
 };
